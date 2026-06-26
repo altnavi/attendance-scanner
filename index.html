@@ -15,7 +15,6 @@
       overflow: hidden;
     }
 
-    /* FULLSCREEN CAMERA */
     #video {
       position: fixed;
       top: 0;
@@ -25,8 +24,8 @@
       object-fit: cover;
     }
 
-    /* CENTER SCAN AREA */
-    #scanBox {
+    /* ===== ROI BOX ===== */
+    #roi {
       position: fixed;
       top: 50%;
       left: 50%;
@@ -34,12 +33,24 @@
       height: 160px;
       transform: translate(-50%, -50%);
       border: 2px solid lime;
-      border-radius: 12px;
       box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
-      pointer-events: none;
+      border-radius: 10px;
+      cursor: move;
+      touch-action: none;
     }
 
-    /* UI */
+    /* resize handle */
+    #handle {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      right: -7px;
+      bottom: -7px;
+      background: lime;
+      border-radius: 50%;
+      cursor: nwse-resize;
+    }
+
     #status {
       position: fixed;
       bottom: 20px;
@@ -47,7 +58,6 @@
       text-align: center;
       color: white;
       font-family: Arial;
-      font-size: 18px;
     }
 
     #name {
@@ -57,18 +67,17 @@
       text-align: center;
       color: white;
       font-family: Arial;
-      font-size: 16px;
     }
-
-    .ok { color: lime; }
-    .bad { color: red; }
   </style>
 </head>
 
 <body>
 
 <video id="video" autoplay playsinline></video>
-<div id="scanBox"></div>
+
+<div id="roi">
+  <div id="handle"></div>
+</div>
 
 <div id="status">Starting...</div>
 <div id="name"></div>
@@ -80,21 +89,108 @@ const SCRIPT_URL =
 
 let codeReader;
 let scanning = true;
-let lastScan = 0;
 
 /* =========================
-   PARSE PDF417 STRUCTURE
+   ROI STATE (normalized)
 ========================= */
 
-function parseDNI(raw) {
+let roi = {
+  x: 0.5,
+  y: 0.5,
+  w: 0.3,
+  h: 0.25
+};
 
-  const p = raw.split("@");
+/* =========================
+   ROI ELEMENTS
+========================= */
 
-  return {
-    dni: p[4] || "",
-    apellido: p[1] || "",
-    nombre: p[2] || ""
+const roiEl = document.getElementById("roi");
+const handle = document.getElementById("handle");
+
+/* =========================
+   DRAG BOX
+========================= */
+
+let dragging = false;
+let resizing = false;
+let startX, startY, startW, startH, startLeft, startTop;
+
+roiEl.addEventListener("pointerdown", (e) => {
+  if (e.target === handle) return;
+
+  dragging = true;
+  startX = e.clientX;
+  startY = e.clientY;
+
+  const rect = roiEl.getBoundingClientRect();
+  startLeft = rect.left;
+  startTop = rect.top;
+});
+
+handle.addEventListener("pointerdown", (e) => {
+  resizing = true;
+  startX = e.clientX;
+  startY = e.clientY;
+
+  const rect = roiEl.getBoundingClientRect();
+  startW = rect.width;
+  startH = rect.height;
+
+  e.stopPropagation();
+});
+
+window.addEventListener("pointermove", (e) => {
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  const rect = roiEl.getBoundingClientRect();
+
+  if (dragging) {
+
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    roiEl.style.left = (startLeft + dx + rect.width / 2) + "px";
+    roiEl.style.top = (startTop + dy + rect.height / 2) + "px";
+
+    updateROI();
+  }
+
+  if (resizing) {
+
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    roiEl.style.width = Math.max(100, startW + dx) + "px";
+    roiEl.style.height = Math.max(80, startH + dy) + "px";
+
+    updateROI();
+  }
+});
+
+window.addEventListener("pointerup", () => {
+  dragging = false;
+  resizing = false;
+});
+
+/* =========================
+   UPDATE ROI NORMALIZED
+========================= */
+
+function updateROI() {
+
+  const rect = roiEl.getBoundingClientRect();
+
+  roi = {
+    x: (rect.left + rect.width / 2) / window.innerWidth,
+    y: (rect.top + rect.height / 2) / window.innerHeight,
+    w: rect.width / window.innerWidth,
+    h: rect.height / window.innerHeight
   };
+
+  console.log("ROI:", roi);
 }
 
 /* =========================
@@ -105,99 +201,39 @@ async function start() {
 
   const video = document.getElementById("video");
 
-  try {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: "environment",
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    }
+  });
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "environment",
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
-      }
-    });
+  video.srcObject = stream;
+  await video.play();
 
-    video.srcObject = stream;
-    await video.play();
+  codeReader = new ZXingBrowser.BrowserMultiFormatReader();
 
-    codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+  document.getElementById("status").textContent = "Scanning...";
 
-    document.getElementById("status").textContent = "Scanning...";
+  codeReader.decodeFromVideoDevice(
+    null,
+    video,
+    (result) => {
 
-    codeReader.decodeFromVideoDevice(
-      null,
-      video,
-      (result) => {
-
-        if (!result || !scanning) return;
-
-        const now = Date.now();
-        if (now - lastScan < 300) return;
-        lastScan = now;
+      if (result && scanning) {
 
         scanning = false;
 
-        const data = parseDNI(result.getText());
-
-        send(data);
+        document.getElementById("status").textContent =
+          "Detected (ROI not applied yet)";
 
         setTimeout(() => scanning = true, 1200);
       }
-    );
 
-  } catch (err) {
-
-    document.getElementById("status").textContent =
-      err.name + ": " + err.message;
-  }
-}
-
-/* =========================
-   SEND TO BACKEND
-========================= */
-
-function send(data) {
-
-  document.getElementById("status").textContent = "Processing...";
-
-  fetch(SCRIPT_URL, {
-    method: "POST",
-    body: JSON.stringify(data),
-    headers: {
-      "Content-Type": "text/plain"
     }
-  })
-  .then(r => r.json())
-  .then(show)
-  .catch(e => {
-    document.getElementById("status").textContent = e.toString();
-  });
+  );
 }
-
-/* =========================
-   UI RESULT
-========================= */
-
-function show(res) {
-
-  if (res.status === "OK") {
-
-    document.getElementById("status").className = "ok";
-    document.getElementById("status").textContent = "OK";
-
-    document.getElementById("name").textContent =
-      res.nombre + " " + res.apellido;
-
-  } else {
-
-    document.getElementById("status").className = "bad";
-    document.getElementById("status").textContent = "NOT FOUND";
-
-    document.getElementById("name").textContent = "";
-  }
-}
-
-/* =========================
-   INIT
-========================= */
 
 start();
 
