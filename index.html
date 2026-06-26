@@ -2,10 +2,9 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>DNI Scanner - Production Engine</title>
+  <title>DNI Decoder Standard - Core Engine</title>
 
-  <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
-
+  <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
   <style>
     html, body {
       margin: 0;
@@ -25,13 +24,17 @@
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 80vw;
-      height: 160px;
+      width: 500px;
+      height: 150px;
       transform: translate(-50%, -50%);
       border: 3px solid lime;
       box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
       border-radius: 8px;
       pointer-events: none;
+    }
+
+    #canvas {
+      display: none; 
     }
 
     #status {
@@ -65,10 +68,12 @@
 
 <body>
 
-<video id="video" playsinline></video>
+<video id="video" autoplay playsinline></video>
 <div id="roi"></div>
 
-<div id="status">Initializing Engine...</div>
+<canvas id="canvas"></canvas>
+
+<div id="status">Starting Engine...</div>
 <div id="name"></div>
 
 <script>
@@ -76,8 +81,17 @@
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
+/* =========================
+   STATE
+========================= */
 let reader;
+let isProcessingFrame = false;
+let scanning = true;
+
 const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const roiEl = document.getElementById("roi");
 const statusEl = document.getElementById("status");
 const nameEl = document.getElementById("name");
 
@@ -93,6 +107,66 @@ function parseDNI(raw) {
     apellido: (p[1] || "").trim(),
     nombre: (p[2] || "").trim()
   };
+}
+
+/* =========================
+   CROP MATH (OBJECT-FIT COVER PROOF)
+========================= */
+function getCropCoordinates() {
+  const videoWidth = video.videoWidth;
+  const videoHeight = video.videoHeight;
+  const rect = video.getBoundingClientRect();
+
+  const videoRatio = videoWidth / videoHeight;
+  const elementRatio = rect.width / rect.height;
+
+  let scale, implicitWidth, implicitHeight;
+
+  if (elementRatio > videoRatio) {
+    scale = rect.width / videoWidth;
+    implicitWidth = rect.width;
+    implicitHeight = rect.width / videoRatio;
+  } else {
+    scale = rect.height / videoHeight;
+    implicitWidth = rect.height * videoRatio;
+    implicitHeight = rect.height;
+  }
+
+  const videoLeft = rect.left + (rect.width - implicitWidth) / 2;
+  const videoTop = rect.top + (rect.height - implicitHeight) / 2;
+  const roi = roiEl.getBoundingClientRect();
+
+  return {
+    sx: (roi.left - videoLeft) / scale,
+    sy: (roi.top - videoTop) / scale,
+    sw: roi.width / scale,
+    sh: roi.height / scale
+  };
+}
+
+/* =========================
+   CAPTURE AND RESCALE IMAGE
+========================= */
+function processAndCaptureFrame() {
+  const { sx, sy, sw, sh } = getCropCoordinates();
+
+  if (sw <= 0 || sh <= 0 || isNaN(sx) || isNaN(sy)) return false;
+
+  const RESOLUTION_MULTIPLIER = 3.0;
+
+  canvas.width = sw * RESOLUTION_MULTIPLIER;
+  canvas.height = sh * RESOLUTION_MULTIPLIER;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.filter = "contrast(1.4) grayscale(1)";
+
+  ctx.drawImage(
+    video,
+    sx, sy, sw, sh,
+    0, 0, canvas.width, canvas.height
+  );
+
+  return true;
 }
 
 /* =========================
@@ -117,70 +191,104 @@ function send(data) {
     }
     
     setTimeout(() => {
+      scanning = true;
+      isProcessingFrame = false;
       setStatus("Scanning...");
-      startScanner();
-    }, 4000);
+      loop();
+    }, 3000);
   })
   .catch(e => {
     setStatus("Error: " + e.toString(), "bad");
     setTimeout(() => {
+      scanning = true;
+      isProcessingFrame = false;
       setStatus("Scanning...");
-      startScanner();
-    }, 4000);
+      loop();
+    }, 3000);
   });
 }
 
 /* =========================
-   STREAM PROCESSING PIPELINE
+   LOW-LEVEL CORE ENGINE DECODE LOOP
 ========================= */
-function startScanner() {
-  const constraints = {
-    audio: false,
-    video: {
-      facingMode: "environment",
-      width: { ideal: 1920, min: 1280 },
-      height: { ideal: 1080, min: 720 }
-    }
-  };
+function loop() {
+  if (!scanning || isProcessingFrame) return;
 
-  // decodeFromConstraints maps constraints, targeted video element, and continuous frame outputs natively
-  reader.decodeFromConstraints(constraints, video, (result, error) => {
-    if (result) {
-      reader.reset(); // Disconnect pipeline temporarily to hold layout focus
-      setStatus("Code Found!");
-      
-      const data = parseDNI(result.getText());
-      send(data);
-    }
+  if (video.videoWidth === 0 || video.videoHeight === 0) {
+    requestAnimationFrame(loop);
+    return;
+  }
 
-    if (error && !(error instanceof ZXing.NotFoundException)) {
-      console.error("Hardware pipeline error:", error);
+  isProcessingFrame = true;
+
+  if (!processAndCaptureFrame()) {
+    isProcessingFrame = false;
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  try {
+    // 1. Get raw pixel RGBA matrix array data from the high-res canvas
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    
+    // 2. Wrap it directly into low-level ZXing memory classes
+    const luminanceSource = new ZXing.RGBLuminanceSource(imgData.data, canvas.width, canvas.height);
+    const binarizer = new ZXing.HybridBinarizer(luminanceSource);
+    const bitmap = new ZXing.BinaryBitmap(binarizer);
+
+    // 3. Directly invoke core decode method (universal across all library builds)
+    const result = reader.decode(bitmap);
+
+    scanning = false;
+    const data = parseDNI(result.getText());
+    send(data);
+
+  } catch (err) {
+    // Falls back into loop frame cycles seamlessly when a signature match isn't found
+    isProcessingFrame = false;
+    if (scanning) {
+      setTimeout(loop, 120);
     }
-  });
+  }
 }
 
 /* =========================
    INITIALIZATION
 ========================= */
-function init() {
+async function start() {
+  setStatus("Starting Camera...");
+
   try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1920, min: 1280 },
+        height: { ideal: 1080, min: 720 }
+      }
+    });
+
+    video.srcObject = stream;
+    await video.play();
+
+    // Setup pure base engine MultiFormatReader object instance
+    reader = new ZXing.MultiFormatReader();
+
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-
-    reader = new ZXing.BrowserMultiFormatReader(hints);
+    
+    reader.setHints(hints);
 
     setStatus("Scanning...");
-    startScanner();
+    loop();
 
   } catch (err) {
     console.error(err);
-    setStatus("Initialization error: " + err.message, "bad");
+    setStatus("Camera initialization failed: " + err.message, "bad");
   }
 }
 
-// Fire runtime setup execution
-init();
+start();
 
 </script>
 
