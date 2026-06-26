@@ -8,7 +8,7 @@
 
   <style>
     body {
-      font-family: Arial, sans-serif;
+      font-family: Arial;
       text-align: center;
       margin-top: 20px;
     }
@@ -21,6 +21,18 @@
 
     .ok { color: green; }
     .bad { color: red; }
+
+    #flash {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: white;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
   </style>
 </head>
 
@@ -33,63 +45,91 @@
 <h3 id="status">Starting...</h3>
 <p id="name"></p>
 
+<div id="flash"></div>
+
 <script>
 
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
-let codeReader = null;
+let codeReader;
 let scanning = true;
+
+/* =========================
+   PARSE PDF417 STRUCTURE
+========================= */
+
+function parseDNIData(raw) {
+
+  const p = raw.split("@");
+
+  return {
+    dni: p[4] || "",
+    apellido: p[1] || "",
+    nombre: p[2] || ""
+  };
+}
+
+/* =========================
+   FLASH FEEDBACK
+========================= */
+
+function flash() {
+  const f = document.getElementById("flash");
+  f.style.opacity = 1;
+  setTimeout(() => f.style.opacity = 0, 120);
+}
+
+/* =========================
+   START SCANNER
+========================= */
 
 async function startScanner() {
 
   const video = document.getElementById("video");
 
-  try {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment" }
+  });
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" }
-    });
+  video.srcObject = stream;
 
-    video.srcObject = stream;
+  codeReader = new ZXingBrowser.BrowserMultiFormatReader();
 
-    codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+  document.getElementById("status").textContent = "Scanning...";
 
-    document.getElementById("status").textContent = "Scanning...";
+  codeReader.decodeFromVideoDevice(
+    undefined,
+    video,
+    (result, err) => {
 
-    codeReader.decodeFromVideoDevice(
-      undefined,
-      video,
-      (result, err) => {
+      if (result && scanning) {
 
-        if (result && scanning) {
+        scanning = false;
 
-          scanning = false;
+        const parsed = parseDNIData(result.getText());
 
-          handleScan(result.getText());
+        send(parsed);
 
-          // prevent duplicate scans
-          setTimeout(() => scanning = true, 1500);
-        }
-
+        setTimeout(() => scanning = true, 1200);
       }
-    );
-
-  } catch (err) {
-
-    document.getElementById("status").textContent =
-      err.name + ": " + err.message;
-
-  }
+    }
+  );
 }
 
-function handleScan(text) {
+/* =========================
+   SEND TO APPS SCRIPT
+========================= */
+
+function send(data) {
+
+  flash();
 
   document.getElementById("status").textContent = "Processing...";
 
   fetch(SCRIPT_URL, {
     method: "POST",
-    body: JSON.stringify({ barcode: text }),
+    body: JSON.stringify(data),
     headers: {
       "Content-Type": "text/plain"
     }
@@ -99,8 +139,11 @@ function handleScan(text) {
   .catch(err => {
     document.getElementById("status").textContent = err.toString();
   });
-
 }
+
+/* =========================
+   UI RESULT
+========================= */
 
 function showResult(res) {
 
@@ -118,9 +161,13 @@ function showResult(res) {
     document.getElementById("status").textContent = "NOT FOUND";
 
     document.getElementById("name").textContent = "";
-
   }
+
 }
+
+/* =========================
+   INIT
+========================= */
 
 startScanner();
 
