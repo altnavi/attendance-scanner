@@ -173,13 +173,8 @@ function getCropCoordinates() {
 ========================= */
 function processAndCaptureFrame() {
 
-  const { sx, sy, sw, sh } = getCropCoordinates();
-
-  if (sw <= 0 || sh <= 0 || isNaN(sx) || isNaN(sy))
-    return false;
-
-  canvas.width = Math.round(sw);
-  canvas.height = Math.round(sh);
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
 
   ctx.imageSmoothingEnabled = false;
   ctx.filter = "none";
@@ -188,16 +183,23 @@ function processAndCaptureFrame() {
 
   ctx.drawImage(
     video,
-    sx, sy, sw, sh,
-    0, 0, canvas.width, canvas.height
+    0, 0,
+    video.videoWidth,
+    video.videoHeight
   );
 
-  debugCanvas.width = canvas.width;
-  debugCanvas.height = canvas.height;
+  debugCanvas.width = 220;
+  debugCanvas.height =
+    Math.round(220 * video.videoHeight / video.videoWidth);
 
-  debugCtx.imageSmoothingEnabled = false;
-  debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-  debugCtx.drawImage(canvas, 0, 0);
+  debugCtx.clearRect(0,0,debugCanvas.width,debugCanvas.height);
+
+  debugCtx.drawImage(
+    canvas,
+    0,0,
+    debugCanvas.width,
+    debugCanvas.height
+  );
 
   return true;
 }
