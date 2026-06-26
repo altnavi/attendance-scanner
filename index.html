@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>DNI Scanner Pro</title>
+  <title>DNI Scanner Fixed</title>
 
   <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
 
@@ -21,22 +21,29 @@
       object-fit: cover;
     }
 
-    /* Adjusted to match the ultra-wide aspect ratio of a PDF417 barcode */
     #roi {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 520px;
-      height: 160px;
+      width: 500px;
+      height: 140px;
       transform: translate(-50%, -50%);
       border: 3px solid lime;
-      box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.6);
       border-radius: 8px;
       pointer-events: none;
     }
 
+    /* Set to absolute and a small size to preview what the reader actually sees */
     #canvas {
-      display: none; /* Keep hidden. Change to display: block for troubleshooting */
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      width: 150px;
+      height: auto;
+      z-index: 999;
+      border: 1px solid white;
+      background: #222;
     }
 
     #status {
@@ -84,19 +91,14 @@ const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
 /* =========================
-   STATE & HINTS
+   STATE & CORES
 ========================= */
 let reader;
+let isProcessingFrame = false; // STOPS OVERLAP DECODING completely
 let scanning = true;
 
-// Define specific decoding parameters to drastically push computational focus
-const hints = new Map();
-hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
-hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-hints.set(ZXing.DecodeHintType.CHARACTER_SET, "UTF-8");
-
 /* =========================
-   ELEMENTS (CACHE ONCE)
+   ELEMENTS
 ========================= */
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
@@ -110,9 +112,6 @@ function setStatus(t, cls="") {
   statusEl.className = cls;
 }
 
-/* =========================
-   PARSE PDF417 DNI DATA
-========================= */
 function parseDNI(raw) {
   const p = raw.split("@");
   return {
@@ -122,9 +121,6 @@ function parseDNI(raw) {
   };
 }
 
-/* =========================
-   ROI CROP COORDINATES
-========================= */
 function getCrop() {
   const rect = video.getBoundingClientRect();
   const roi = roiEl.getBoundingClientRect();
@@ -141,36 +137,46 @@ function getCrop() {
 }
 
 /* =========================
-   CAPTURE & ENHANCE FRAME
+   CAPTURE WITH MANUAL BINARIZATION
 ========================= */
 function capture() {
   const { sx, sy, sw, sh } = getCrop();
 
+  if(sw <= 0 || sh <= 0) return false;
+
   canvas.width = sw;
   canvas.height = sh;
 
-  // Clear previous allocations
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
 
-  // Apply real-time sharpness filter directly to canvas element layer before capture
-  ctx.filter = "contrast(1.4) grayscale(1)"; 
+  // Manual High-Contrast Grayscale (Fallback for browsers ignoring ctx.filter)
+  try {
+    const imgData = ctx.getImageData(0, 0, sw, sh);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      // Standard luminance weights
+      let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      
+      // Dynamic Threshold Contrast Maximization
+      gray = gray > 120 ? 255 : 0; 
+      
+      data[i]     = gray; // R
+      data[i + 1] = gray; // G
+      data[i + 2] = gray; // B
+    }
+    ctx.putImageData(imgData, 0, 0);
+  } catch(e) {
+    console.warn("Luminance patch skipped:", e);
+  }
 
-  ctx.drawImage(
-    video,
-    sx, sy, sw, sh,
-    0, 0,
-    canvas.width,
-    canvas.height
-  );
-
-  return canvas;
+  return true;
 }
 
 /* =========================
-   API POST SEND
+   SEND POST
 ========================= */
 function send(data) {
-  setStatus("Processing...");
+  setStatus("Processing API...");
 
   fetch(SCRIPT_URL, {
     method: "POST",
@@ -187,17 +193,18 @@ function send(data) {
       nameEl.textContent = "";
     }
     
-    // Pause for 2.5 seconds so user can see result, then resume
     setTimeout(() => {
       scanning = true;
+      isProcessingFrame = false;
       setStatus("Scanning...");
       loop();
-    }, 2500);
+    }, 3000);
   })
   .catch(e => {
     setStatus("Error: " + e.toString(), "bad");
     setTimeout(() => {
       scanning = true;
+      isProcessingFrame = false;
       setStatus("Scanning...");
       loop();
     }, 3000);
@@ -205,47 +212,53 @@ function send(data) {
 }
 
 /* =========================
-   STABLE ASYNC SCAN LOOP
+   STABLE SEQUENTIAL LOOP
 ========================= */
-function loop() {
-  if (!scanning) return;
+async function loop() {
+  if (!scanning || isProcessingFrame) return;
 
   if (video.videoWidth === 0 || video.videoHeight === 0) {
     requestAnimationFrame(loop);
     return;
   }
 
+  // Set the concurrency block lock immediately
+  isProcessingFrame = true;
+
+  const dynamicCaptureSuccess = capture();
+  
+  if (!dynamicCaptureSuccess) {
+    isProcessingFrame = false;
+    requestAnimationFrame(loop);
+    return;
+  }
+
   try {
-    const croppedCanvas = capture();
+    // Explicitly using decodeFromCanvas to ensure state cleanly isolates
+    const result = await reader.decodeFromCanvas(canvas);
+    
+    // IF WE REACH HERE: Barcode found successfully!
+    scanning = false; 
+    const data = parseDNI(result.getText());
+    send(data);
 
-    // Use decode with performance configurations applied
-    reader.decode(croppedCanvas)
-      .then(result => {
-        scanning = false; // Freeze immediately
-        const data = parseDNI(result.getText());
-        send(data);
-      })
-      .catch(() => {
-        // If nothing found, try again in 120ms to allow smooth focus change
-        if (scanning) {
-          setTimeout(loop, 120);
-        }
-      });
-
-  } catch (e) {
-    console.error(e);
-    if (scanning) setTimeout(loop, 1000);
+  } catch (error) {
+    // No barcode discovered in this frame matrix. 
+    // Release the lock and call next sequence via safe delay interval
+    isProcessingFrame = false;
+    if (scanning) {
+      setTimeout(loop, 200); 
+    }
   }
 }
 
 /* =========================
-   INITIALIZE WEBCAM & DEVICE
+   INITIALIZE & CONFIGURE
 ========================= */
 async function start() {
   setStatus("Starting camera...");
 
   try {
-    // Request full high-definition stream for density resolution processing
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "environment",
@@ -257,7 +270,11 @@ async function start() {
     video.srcObject = stream;
     await video.play();
 
-    // Initialize custom multi-format instance bound with strict configurations
+    // Strict decoding configuration parameters map
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
     reader = new ZXing.BrowserMultiFormatReader(hints);
 
     setStatus("Scanning...");
@@ -265,7 +282,7 @@ async function start() {
 
   } catch (err) {
     console.error(err);
-    setStatus("Camera initialization failed: " + err.message, "bad");
+    setStatus("Camera error: " + err.message, "bad");
   }
 }
 
