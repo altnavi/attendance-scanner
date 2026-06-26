@@ -37,6 +37,15 @@
       display: none; 
     }
 
+    #debugCanvas {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      width: 220px;
+      border: 2px solid yellow;
+      background: black;
+      z-index: 9999;
+    }
     #status {
       position: fixed;
       bottom: 20px;
@@ -72,6 +81,7 @@
 <div id="roi"></div>
 
 <canvas id="canvas"></canvas>
+<canvas id="debugCanvas"></canvas>
 
 <div id="status">Starting Engine...</div>
 <div id="name"></div>
@@ -91,6 +101,8 @@ let scanning = true;
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const debugCanvas = document.getElementById("debugCanvas");
+const debugCtx = debugCanvas.getContext("2d");
 const roiEl = document.getElementById("roi");
 const statusEl = document.getElementById("status");
 const nameEl = document.getElementById("name");
@@ -148,17 +160,19 @@ function getCropCoordinates() {
    CAPTURE AND RESCALE IMAGE
 ========================= */
 function processAndCaptureFrame() {
+
   const { sx, sy, sw, sh } = getCropCoordinates();
 
-  if (sw <= 0 || sh <= 0 || isNaN(sx) || isNaN(sy)) return false;
+  if (sw <= 0 || sh <= 0 || isNaN(sx) || isNaN(sy))
+    return false;
 
-  const RESOLUTION_MULTIPLIER = 1.0;
+  canvas.width = Math.round(sw);
+  canvas.height = Math.round(sh);
 
-  canvas.width = sw * RESOLUTION_MULTIPLIER;
-  canvas.height = sh * RESOLUTION_MULTIPLIER;
+  ctx.imageSmoothingEnabled = false;
+  ctx.filter = "none";
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.filter = "none";
 
   ctx.drawImage(
     video,
@@ -166,47 +180,14 @@ function processAndCaptureFrame() {
     0, 0, canvas.width, canvas.height
   );
 
-  window.open(canvas.toDataURL("image/png"), "_blank");
-  return false;
-}
+  debugCanvas.width = canvas.width;
+  debugCanvas.height = canvas.height;
 
-/* =========================
-   SEND POST
-========================= */
-function send(data) {
-  setStatus("Processing API...");
+  debugCtx.imageSmoothingEnabled = false;
+  debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+  debugCtx.drawImage(canvas, 0, 0);
 
-  fetch(SCRIPT_URL, {
-    method: "POST",
-    body: JSON.stringify(data),
-    headers: { "Content-Type": "text/plain" }
-  })
-  .then(r => r.json())
-  .then(res => {
-    if (res.status === "OK") {
-      setStatus("OK", "ok");
-      nameEl.textContent = res.nombre + " " + res.apellido;
-    } else {
-      setStatus("NOT FOUND", "bad");
-      nameEl.textContent = "";
-    }
-    
-    setTimeout(() => {
-      scanning = true;
-      isProcessingFrame = false;
-      setStatus("Scanning...");
-      loop();
-    }, 3000);
-  })
-  .catch(e => {
-    setStatus("Error: " + e.toString(), "bad");
-    setTimeout(() => {
-      scanning = true;
-      isProcessingFrame = false;
-      setStatus("Scanning...");
-      loop();
-    }, 3000);
-  });
+  return true;
 }
 
 /* =========================
@@ -245,13 +226,13 @@ function loop() {
     send(data);
 
   } catch(err) {
-    console.log(err);
+      console.log(err);
 
-    isProcessingFrame = false;
+      isProcessingFrame = false;
 
-    if(scanning)
-        setTimeout(loop,120);
-}
+      if(scanning)
+          setTimeout(loop,120);
+  }
 }
 
 /* =========================
