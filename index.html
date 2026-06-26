@@ -4,129 +4,105 @@
   <meta charset="utf-8" />
   <title>Attendance Scanner</title>
 
-  <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@latest/umd/index.min.js"></script>
-
   <style>
-    body {
-      font-family: Arial;
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: black;
+      overflow: hidden;
+    }
+
+    /* FULL SCREEN VIDEO */
+    #video {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover; /* IMPORTANT: fills screen like native scanner */
+      background: black;
+    }
+
+    /* CENTER SCAN BOX */
+    #scanBox {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      width: 280px;
+      height: 160px;
+      transform: translate(-50%, -50%);
+      border: 2px solid lime;
+      border-radius: 12px;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45); /* dark outside area */
+      pointer-events: none;
+    }
+
+    /* STATUS */
+    #status {
+      position: fixed;
+      bottom: 20px;
+      width: 100%;
       text-align: center;
-      margin-top: 20px;
-      background: #111;
       color: white;
+      font-family: Arial;
+      font-size: 18px;
+      z-index: 10;
     }
 
-    video {
-      width: 90%;
-      max-width: 500px;
-      border: 2px solid #444;
-      border-radius: 10px;
+    #name {
+      position: fixed;
+      bottom: 50px;
+      width: 100%;
+      text-align: center;
+      color: white;
+      font-family: Arial;
+      font-size: 16px;
+      z-index: 10;
     }
-
-    .ok { color: lime; }
-    .bad { color: red; }
   </style>
 </head>
 
 <body>
 
-<h2>Attendance Scanner</h2>
-
 <video id="video" autoplay playsinline></video>
 
-<h3 id="status">Starting...</h3>
-<p id="name"></p>
+<div id="scanBox"></div>
+
+<div id="status">Starting camera...</div>
+<div id="name"></div>
 
 <script>
 
-const SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
-
-let codeReader;
-let scanning = true;
-
-async function startScanner() {
+async function startCamera() {
 
   const video = document.getElementById("video");
 
   try {
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" }
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
     });
 
     video.srcObject = stream;
 
     await video.play();
 
-    // IMPORTANT: correct ZXing namespace
-    codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+    document.getElementById("status").textContent = "Camera ready";
 
-    document.getElementById("status").textContent = "Scanning...";
-
-    codeReader.decodeFromVideoDevice(
-      null,
-      video,
-      (result, err) => {
-
-        if (result && scanning) {
-
-          scanning = false;
-
-          handleScan(result.getText());
-
-          setTimeout(() => scanning = true, 1500);
-        }
-
-      }
-    );
-
-  } catch (e) {
+  } catch (err) {
 
     document.getElementById("status").textContent =
-      e.name + ": " + e.message;
+      err.name + ": " + err.message;
 
   }
 }
 
-function handleScan(text) {
-
-  document.getElementById("status").textContent = "Processing...";
-
-  fetch(SCRIPT_URL, {
-    method: "POST",
-    body: JSON.stringify({ barcode: text }),
-    headers: {
-      "Content-Type": "text/plain"
-    }
-  })
-  .then(r => r.json())
-  .then(showResult)
-  .catch(err => {
-    document.getElementById("status").textContent = err.toString();
-  });
-
-}
-
-function showResult(res) {
-
-  if (res.status === "OK") {
-
-    document.getElementById("status").className = "ok";
-    document.getElementById("status").textContent = "OK";
-
-    document.getElementById("name").textContent =
-      res.nombre + " " + res.apellido;
-
-  } else {
-
-    document.getElementById("status").className = "bad";
-    document.getElementById("status").textContent = "NOT FOUND";
-
-    document.getElementById("name").textContent = "";
-  }
-}
-
-startScanner();
+startCamera();
 
 </script>
 
