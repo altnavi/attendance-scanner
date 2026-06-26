@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>DNI Scanner Fixed</title>
+  <title>DNI Scanner - Full Frame</title>
 
   <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
 
@@ -21,25 +21,25 @@
       object-fit: cover;
     }
 
+    /* Guided target line just to help the user align the card horizontally */
     #roi {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 500px;
-      height: 140px;
+      width: 80vw;
+      height: 2px;
+      background: lime;
       transform: translate(-50%, -50%);
-      border: 3px solid lime;
-      box-shadow: 0 0 0 9999px rgba(0,0,0,0.6);
-      border-radius: 8px;
+      box-shadow: 0 0 10px lime;
       pointer-events: none;
     }
 
-    /* Set to absolute and a small size to preview what the reader actually sees */
+    /* Small live preview of the raw processed data stream being analyzed */
     #canvas {
       position: fixed;
       top: 10px;
       left: 10px;
-      width: 150px;
+      width: 160px;
       height: auto;
       z-index: 999;
       border: 1px solid white;
@@ -94,7 +94,7 @@ const SCRIPT_URL =
    STATE & CORES
 ========================= */
 let reader;
-let isProcessingFrame = false; // STOPS OVERLAP DECODING completely
+let isProcessingFrame = false; 
 let scanning = true;
 
 /* =========================
@@ -103,7 +103,6 @@ let scanning = true;
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
-const roiEl = document.getElementById("roi");
 const statusEl = document.getElementById("status");
 const nameEl = document.getElementById("name");
 
@@ -121,53 +120,24 @@ function parseDNI(raw) {
   };
 }
 
-function getCrop() {
-  const rect = video.getBoundingClientRect();
-  const roi = roiEl.getBoundingClientRect();
-
-  const scaleX = video.videoWidth / rect.width;
-  const scaleY = video.videoHeight / rect.height;
-
-  const sx = (roi.left - rect.left) * scaleX;
-  const sy = (roi.top - rect.top) * scaleY;
-  const sw = roi.width * scaleX;
-  const sh = roi.height * scaleY;
-
-  return { sx, sy, sw, sh };
-}
-
 /* =========================
-   CAPTURE WITH MANUAL BINARIZATION
+   CAPTURE FULL FRAME (NO CROP)
 ========================= */
 function capture() {
-  const { sx, sy, sw, sh } = getCrop();
+  const w = video.videoWidth;
+  const h = video.videoHeight;
 
-  if(sw <= 0 || sh <= 0) return false;
+  if (w === 0 || h === 0) return false;
 
-  canvas.width = sw;
-  canvas.height = sh;
+  // Canvas size perfectly mirrors the high-res camera stream dimensions
+  canvas.width = w;
+  canvas.height = h;
 
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+  // Apply light image normalization directly to native engine layer
+  ctx.filter = "contrast(1.2) grayscale(1)";
 
-  // Manual High-Contrast Grayscale (Fallback for browsers ignoring ctx.filter)
-  try {
-    const imgData = ctx.getImageData(0, 0, sw, sh);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      // Standard luminance weights
-      let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      
-      // Dynamic Threshold Contrast Maximization
-      gray = gray > 120 ? 255 : 0; 
-      
-      data[i]     = gray; // R
-      data[i + 1] = gray; // G
-      data[i + 2] = gray; // B
-    }
-    ctx.putImageData(imgData, 0, 0);
-  } catch(e) {
-    console.warn("Luminance patch skipped:", e);
-  }
+  // Draw the absolute entire camera frame onto the workspace
+  ctx.drawImage(video, 0, 0, w, h);
 
   return true;
 }
@@ -212,7 +182,7 @@ function send(data) {
 }
 
 /* =========================
-   STABLE SEQUENTIAL LOOP
+   SEQUENTIAL SCAN LOOP
 ========================= */
 async function loop() {
   if (!scanning || isProcessingFrame) return;
@@ -222,32 +192,27 @@ async function loop() {
     return;
   }
 
-  // Set the concurrency block lock immediately
   isProcessingFrame = true;
 
-  const dynamicCaptureSuccess = capture();
-  
-  if (!dynamicCaptureSuccess) {
+  if (!capture()) {
     isProcessingFrame = false;
     requestAnimationFrame(loop);
     return;
   }
 
   try {
-    // Explicitly using decodeFromCanvas to ensure state cleanly isolates
+    // Read directly from full frame snapshot
     const result = await reader.decodeFromCanvas(canvas);
     
-    // IF WE REACH HERE: Barcode found successfully!
     scanning = false; 
     const data = parseDNI(result.getText());
     send(data);
 
   } catch (error) {
-    // No barcode discovered in this frame matrix. 
-    // Release the lock and call next sequence via safe delay interval
+    // Release execution block to cycle next frame asynchronously
     isProcessingFrame = false;
     if (scanning) {
-      setTimeout(loop, 200); 
+      setTimeout(loop, 100); 
     }
   }
 }
@@ -270,7 +235,6 @@ async function start() {
     video.srcObject = stream;
     await video.play();
 
-    // Strict decoding configuration parameters map
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
