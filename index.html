@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Attendance Scanner</title>
 
-  <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@latest/umd/index.min.js"></script>
 
   <style>
     body {
@@ -38,8 +38,8 @@
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
-let codeReader;
-let scanning = false;
+let codeReader = null;
+let scanning = true;
 
 async function startScanner() {
 
@@ -53,16 +53,9 @@ async function startScanner() {
 
     video.srcObject = stream;
 
-    // --- ZXing setup (FIXED) ---
-    const hints = new Map();
-    hints.set(
-      ZXing.DecodeHintType.POSSIBLE_FORMATS,
-      [ZXing.BarcodeFormat.PDF_417]
-    );
+    codeReader = new ZXingBrowser.BrowserMultiFormatReader();
 
-    codeReader = new ZXing.BrowserMultiFormatReader(hints);
-
-    scanning = true;
+    document.getElementById("status").textContent = "Scanning...";
 
     codeReader.decodeFromVideoDevice(
       undefined,
@@ -70,17 +63,17 @@ async function startScanner() {
       (result, err) => {
 
         if (result && scanning) {
+
           scanning = false;
+
           handleScan(result.getText());
 
-          // restart scan after delay
+          // prevent duplicate scans
           setTimeout(() => scanning = true, 1500);
         }
 
       }
     );
-
-    document.getElementById("status").textContent = "Scanning...";
 
   } catch (err) {
 
