@@ -119,18 +119,16 @@ function parseDNI(raw) {
 
 function getCrop() {
 
-  const r = roiEl.getBoundingClientRect();
+  const rect = video.getBoundingClientRect();
+  const roi = roiEl.getBoundingClientRect();
 
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  const scaleX = video.videoWidth / rect.width;
+  const scaleY = video.videoHeight / rect.height;
 
-  const scaleX = vw / window.innerWidth;
-  const scaleY = vh / window.innerHeight;
-
-  const sx = r.left * scaleX;
-  const sy = r.top * scaleY;
-  const sw = r.width * scaleX;
-  const sh = r.height * scaleY;
+  const sx = (roi.left - rect.left) * scaleX;
+  const sy = (roi.top - rect.top) * scaleY;
+  const sw = roi.width * scaleX;
+  const sh = roi.height * scaleY;
 
   return { sx, sy, sw, sh };
 }
@@ -143,7 +141,7 @@ function capture() {
 
   const { sx, sy, sw, sh } = getCrop();
 
-  const DOWNSCALE = 0.8;
+  const DOWNSCALE = 1.0;
 
   canvas.width = sw * DOWNSCALE;
   canvas.height = sh * DOWNSCALE;
