@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <title>Attendance Scanner</title>
 
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@latest/umd/index.min.js"></script>
+
   <style>
     html, body {
       margin: 0;
@@ -13,18 +15,17 @@
       overflow: hidden;
     }
 
-    /* FULL SCREEN VIDEO */
+    /* FULLSCREEN CAMERA */
     #video {
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
-      object-fit: cover; /* IMPORTANT: fills screen like native scanner */
-      background: black;
+      object-fit: cover;
     }
 
-    /* CENTER SCAN BOX */
+    /* CENTER SCAN AREA */
     #scanBox {
       position: fixed;
       top: 50%;
@@ -34,11 +35,11 @@
       transform: translate(-50%, -50%);
       border: 2px solid lime;
       border-radius: 12px;
-      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45); /* dark outside area */
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
       pointer-events: none;
     }
 
-    /* STATUS */
+    /* UI */
     #status {
       position: fixed;
       bottom: 20px;
@@ -47,7 +48,6 @@
       color: white;
       font-family: Arial;
       font-size: 18px;
-      z-index: 10;
     }
 
     #name {
@@ -58,23 +58,50 @@
       color: white;
       font-family: Arial;
       font-size: 16px;
-      z-index: 10;
     }
+
+    .ok { color: lime; }
+    .bad { color: red; }
   </style>
 </head>
 
 <body>
 
 <video id="video" autoplay playsinline></video>
-
 <div id="scanBox"></div>
 
-<div id="status">Starting camera...</div>
+<div id="status">Starting...</div>
 <div id="name"></div>
 
 <script>
 
-async function startCamera() {
+const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
+
+let codeReader;
+let scanning = true;
+let lastScan = 0;
+
+/* =========================
+   PARSE PDF417 STRUCTURE
+========================= */
+
+function parseDNI(raw) {
+
+  const p = raw.split("@");
+
+  return {
+    dni: p[4] || "",
+    apellido: p[1] || "",
+    nombre: p[2] || ""
+  };
+}
+
+/* =========================
+   START CAMERA + ZXING
+========================= */
+
+async function start() {
 
   const video = document.getElementById("video");
 
@@ -89,20 +116,90 @@ async function startCamera() {
     });
 
     video.srcObject = stream;
-
     await video.play();
 
-    document.getElementById("status").textContent = "Camera ready";
+    codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+
+    document.getElementById("status").textContent = "Scanning...";
+
+    codeReader.decodeFromVideoDevice(
+      null,
+      video,
+      (result) => {
+
+        if (!result || !scanning) return;
+
+        const now = Date.now();
+        if (now - lastScan < 300) return;
+        lastScan = now;
+
+        scanning = false;
+
+        const data = parseDNI(result.getText());
+
+        send(data);
+
+        setTimeout(() => scanning = true, 1200);
+      }
+    );
 
   } catch (err) {
 
     document.getElementById("status").textContent =
       err.name + ": " + err.message;
-
   }
 }
 
-startCamera();
+/* =========================
+   SEND TO BACKEND
+========================= */
+
+function send(data) {
+
+  document.getElementById("status").textContent = "Processing...";
+
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    body: JSON.stringify(data),
+    headers: {
+      "Content-Type": "text/plain"
+    }
+  })
+  .then(r => r.json())
+  .then(show)
+  .catch(e => {
+    document.getElementById("status").textContent = e.toString();
+  });
+}
+
+/* =========================
+   UI RESULT
+========================= */
+
+function show(res) {
+
+  if (res.status === "OK") {
+
+    document.getElementById("status").className = "ok";
+    document.getElementById("status").textContent = "OK";
+
+    document.getElementById("name").textContent =
+      res.nombre + " " + res.apellido;
+
+  } else {
+
+    document.getElementById("status").className = "bad";
+    document.getElementById("status").textContent = "NOT FOUND";
+
+    document.getElementById("name").textContent = "";
+  }
+}
+
+/* =========================
+   INIT
+========================= */
+
+start();
 
 </script>
 
