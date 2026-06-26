@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Attendance Scanner</title>
+  <title>Scanner</title>
 
   <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@latest/umd/index.min.js"></script>
 
@@ -24,19 +24,16 @@
       object-fit: cover;
     }
 
-    /* =========================
-       ROI (CENTERED FIXED)
-    ========================= */
     #roi {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 600px;   /* ✅ doubled default */
-      height: 360px;  /* ✅ doubled default */
+      width: 600px;
+      height: 360px;
       transform: translate(-50%, -50%);
       border: 2px solid lime;
-      border-radius: 10px;
       box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
+      border-radius: 10px;
       pointer-events: none;
     }
 
@@ -66,7 +63,6 @@
 <body>
 
 <video id="video" autoplay playsinline></video>
-
 <div id="roi"></div>
 
 <canvas id="canvas" style="display:none;"></canvas>
@@ -80,11 +76,22 @@ const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
 let codeReader;
-let scanning = true;
+let scanning = false;
 let lastScan = 0;
 
 /* =========================
-   PARSE PDF417 FORMAT
+   DEBUG STATUS
+========================= */
+
+function setStatus(msg, cls="") {
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = cls;
+  console.log("[STATUS]", msg);
+}
+
+/* =========================
+   PARSER
 ========================= */
 
 function parseDNI(raw) {
@@ -97,7 +104,7 @@ function parseDNI(raw) {
 }
 
 /* =========================
-   ROI → REAL PIXEL CROP
+   ROI CROP + DOWNSCALE
 ========================= */
 
 function captureROI(video) {
@@ -118,8 +125,7 @@ function captureROI(video) {
   const sw = roi.width * scaleX;
   const sh = roi.height * scaleY;
 
-  // ⚡ downscale factor (key optimization)
-  const DOWNSCALE = 0.5;
+  const DOWNSCALE = 0.8; // safer for PDF417
 
   const dw = sw * DOWNSCALE;
   const dh = sh * DOWNSCALE;
@@ -127,75 +133,94 @@ function captureROI(video) {
   canvas.width = dw;
   canvas.height = dh;
 
-  // draw + crop + downscale in one step
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh);
-
-  // grayscale preprocessing (important for PDF417)
-  const img = ctx.getImageData(0, 0, dw, dh);
-  const data = img.data;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const avg = (data[i] + data[i+1] + data[i+2]) / 3;
-    data[i] = data[i+1] = data[i+2] = avg;
-  }
-
-  ctx.putImageData(img, 0, 0);
 
   return canvas;
 }
 
 /* =========================
-   START CAMERA
+   START CAMERA (ROBUST)
 ========================= */
 
 async function start() {
 
-  const video = document.getElementById("video");
+  try {
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: "environment",
-      width: { ideal: 1280 },   // ⚡ faster than 1080p/4K
-      height: { ideal: 720 }
-    }
-  });
+    setStatus("Requesting camera...");
 
-  video.srcObject = stream;
-  await video.play();
+    const video = document.getElementById("video");
 
-  codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    });
 
-  document.getElementById("status").textContent = "Scanning...";
+    setStatus("Camera OK");
+
+    video.srcObject = stream;
+    await video.play();
+
+    setStatus("Initializing decoder...");
+
+    codeReader = new ZXingBrowser.BrowserMultiFormatReader();
+
+    setStatus("Scanner ready");
+
+    scanning = true;
+
+    runLoop(video);
+
+  } catch (err) {
+
+    setStatus(err.name + ": " + err.message, "bad");
+    console.error(err);
+  }
+}
+
+/* =========================
+   SCAN LOOP (FORCED START)
+========================= */
+
+function runLoop(video) {
+
+  setStatus("Scanning...");
 
   setInterval(() => {
 
     if (!scanning) return;
 
     const now = Date.now();
-    if (now - lastScan < 450) return; // ⚡ throttle
+    if (now - lastScan < 500) return;
     lastScan = now;
 
     const canvas = captureROI(video);
 
-    // decode ONLY ROI
-    codeReader.decodeFromCanvas(canvas)
-      .then(result => {
+    try {
 
-        scanning = false;
+      codeReader.decodeFromCanvas(canvas)
+        .then(result => {
 
-        const data = parseDNI(result.getText());
+          scanning = false;
 
-        send(data);
+          const data = parseDNI(result.getText());
 
-        setTimeout(() => scanning = true, 1200);
+          send(data);
 
-      })
-      .catch(() => {
-        // ignore failed frames
-      });
+          setTimeout(() => scanning = true, 1200);
+
+        })
+        .catch(() => {
+          // ignore no-detect frames
+        });
+
+    } catch (e) {
+      console.error("decode crash", e);
+    }
 
   }, 120);
-
 }
 
 /* =========================
@@ -204,7 +229,7 @@ async function start() {
 
 function send(data) {
 
-  document.getElementById("status").textContent = "Processing...";
+  setStatus("Processing...");
 
   fetch(SCRIPT_URL, {
     method: "POST",
@@ -214,33 +239,19 @@ function send(data) {
     }
   })
   .then(r => r.json())
-  .then(show)
-  .catch(e => {
-    document.getElementById("status").textContent = e.toString();
-  });
-}
+  .then(res => {
 
-/* =========================
-   UI
-========================= */
+    if (res.status === "OK") {
+      setStatus("OK", "ok");
+      document.getElementById("name").textContent =
+        res.nombre + " " + res.apellido;
+    } else {
+      setStatus("NOT FOUND", "bad");
+      document.getElementById("name").textContent = "";
+    }
 
-function show(res) {
-
-  if (res.status === "OK") {
-
-    document.getElementById("status").className = "ok";
-    document.getElementById("status").textContent = "OK";
-
-    document.getElementById("name").textContent =
-      res.nombre + " " + res.apellido;
-
-  } else {
-
-    document.getElementById("status").className = "bad";
-    document.getElementById("status").textContent = "NOT FOUND";
-
-    document.getElementById("name").textContent = "";
-  }
+  })
+  .catch(e => setStatus(e.toString(), "bad"));
 }
 
 /* =========================
