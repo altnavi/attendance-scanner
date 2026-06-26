@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Scanner</title>
+  <title>DNI Scanner Pro</title>
 
   <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
 
@@ -21,27 +21,22 @@
       object-fit: cover;
     }
 
-   #roi {
+    /* Adjusted to match the ultra-wide aspect ratio of a PDF417 barcode */
+    #roi {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 500px;   /* Slightly narrower width */
-      height: 150px;  /* Much shorter height */
+      width: 520px;
+      height: 160px;
       transform: translate(-50%, -50%);
-      border: 2px solid lime;
-      box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
-      border-radius: 10px;
+      border: 3px solid lime;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
+      border-radius: 8px;
       pointer-events: none;
     }
 
     #canvas {
-      position: fixed;
-      top: 10px;
-      left: 10px;
-      width: 150px;
-      height: auto;
-      z-index: 999;
-      border: 1px solid white;
+      display: none; /* Keep hidden. Change to display: block for troubleshooting */
     }
 
     #status {
@@ -52,18 +47,20 @@
       color: white;
       font-family: Arial, sans-serif;
       font-weight: bold;
-      text-shadow: 1px 1px 2px black;
+      text-shadow: 2px 2px 3px black;
+      font-size: 18px;
     }
 
     #name {
       position: fixed;
-      bottom: 50px;
+      bottom: 60px;
       width: 100%;
       text-align: center;
       color: white;
       font-family: Arial, sans-serif;
       font-weight: bold;
-      text-shadow: 1px 1px 2px black;
+      text-shadow: 2px 2px 3px black;
+      font-size: 20px;
     }
 
     .ok { color: lime !important; }
@@ -78,7 +75,7 @@
 
 <canvas id="canvas"></canvas>
 
-<div id="status">Starting...</div>
+<div id="status">Starting camera...</div>
 <div id="name"></div>
 
 <script>
@@ -87,27 +84,26 @@ const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
 /* =========================
-   STATE
+   STATE & HINTS
 ========================= */
-
 let reader;
 let scanning = true;
+
+// Define specific decoding parameters to drastically push computational focus
+const hints = new Map();
+hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
+hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+hints.set(ZXing.DecodeHintType.CHARACTER_SET, "UTF-8");
 
 /* =========================
    ELEMENTS (CACHE ONCE)
 ========================= */
-
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const roiEl = document.getElementById("roi");
-
 const statusEl = document.getElementById("status");
 const nameEl = document.getElementById("name");
-
-/* =========================
-   STATUS
-========================= */
 
 function setStatus(t, cls="") {
   statusEl.textContent = t;
@@ -115,9 +111,8 @@ function setStatus(t, cls="") {
 }
 
 /* =========================
-   PARSE PDF417
+   PARSE PDF417 DNI DATA
 ========================= */
-
 function parseDNI(raw) {
   const p = raw.split("@");
   return {
@@ -128,9 +123,8 @@ function parseDNI(raw) {
 }
 
 /* =========================
-   ROI CROP (FIXED)
+   ROI CROP COORDINATES
 ========================= */
-
 function getCrop() {
   const rect = video.getBoundingClientRect();
   const roi = roiEl.getBoundingClientRect();
@@ -147,16 +141,19 @@ function getCrop() {
 }
 
 /* =========================
-   CAPTURE FRAME
+   CAPTURE & ENHANCE FRAME
 ========================= */
-
 function capture() {
   const { sx, sy, sw, sh } = getCrop();
 
-  const DOWNSCALE = 1.0;
+  canvas.width = sw;
+  canvas.height = sh;
 
-  canvas.width = sw * DOWNSCALE;
-  canvas.height = sh * DOWNSCALE;
+  // Clear previous allocations
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Apply real-time sharpness filter directly to canvas element layer before capture
+  ctx.filter = "contrast(1.4) grayscale(1)"; 
 
   ctx.drawImage(
     video,
@@ -170,9 +167,8 @@ function capture() {
 }
 
 /* =========================
-   SEND
+   API POST SEND
 ========================= */
-
 function send(data) {
   setStatus("Processing...");
 
@@ -190,26 +186,30 @@ function send(data) {
       setStatus("NOT FOUND", "bad");
       nameEl.textContent = "";
     }
-
-    // Reactivate scanner and kickstart the loop again
-    scanning = true;
-    loop();
+    
+    // Pause for 2.5 seconds so user can see result, then resume
+    setTimeout(() => {
+      scanning = true;
+      setStatus("Scanning...");
+      loop();
+    }, 2500);
   })
   .catch(e => {
-    setStatus(e.toString(), "bad");
-    scanning = true;
-    loop();
+    setStatus("Error: " + e.toString(), "bad");
+    setTimeout(() => {
+      scanning = true;
+      setStatus("Scanning...");
+      loop();
+    }, 3000);
   });
 }
 
 /* =========================
-   SCAN LOOP (STABLE ASYNC)
+   STABLE ASYNC SCAN LOOP
 ========================= */
-
 function loop() {
   if (!scanning) return;
 
-  // Wait if the camera stream elements haven't initialized layout sizes yet
   if (video.videoWidth === 0 || video.videoHeight === 0) {
     requestAnimationFrame(loop);
     return;
@@ -218,37 +218,34 @@ function loop() {
   try {
     const croppedCanvas = capture();
 
-    reader.decodeFromCanvas(croppedCanvas)
+    // Use decode with performance configurations applied
+    reader.decode(croppedCanvas)
       .then(result => {
-        scanning = false; // Immediately stop further loop triggers
+        scanning = false; // Freeze immediately
         const data = parseDNI(result.getText());
         send(data);
       })
       .catch(() => {
-        // No barcode detected in this frame.
-        // Wait 150ms before grabbing the next one to minimize CPU thrashing.
+        // If nothing found, try again in 120ms to allow smooth focus change
         if (scanning) {
-          setTimeout(loop, 150);
+          setTimeout(loop, 120);
         }
       });
 
   } catch (e) {
     console.error(e);
-    // If a hard failure happens, try to recover after 1 second
-    if (scanning) {
-      setTimeout(loop, 1000);
-    }
+    if (scanning) setTimeout(loop, 1000);
   }
 }
 
 /* =========================
-   START
+   INITIALIZE WEBCAM & DEVICE
 ========================= */
-
 async function start() {
   setStatus("Starting camera...");
 
   try {
+    // Request full high-definition stream for density resolution processing
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "environment",
@@ -260,8 +257,7 @@ async function start() {
     video.srcObject = stream;
     await video.play();
 
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
+    // Initialize custom multi-format instance bound with strict configurations
     reader = new ZXing.BrowserMultiFormatReader(hints);
 
     setStatus("Scanning...");
@@ -269,7 +265,7 @@ async function start() {
 
   } catch (err) {
     console.error(err);
-    setStatus("Camera error: " + err.message, "bad");
+    setStatus("Camera initialization failed: " + err.message, "bad");
   }
 }
 
