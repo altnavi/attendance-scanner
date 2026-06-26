@@ -15,6 +15,9 @@
       overflow: hidden;
     }
 
+    /* =========================
+       CAMERA
+    ========================= */
     #video {
       position: fixed;
       top: 0;
@@ -24,33 +27,37 @@
       object-fit: cover;
     }
 
-    /* ===== ROI BOX ===== */
+    /* =========================
+       CENTER ROI (FIXED)
+    ========================= */
     #roi {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 280px;
-      height: 160px;
+      width: 300px;
+      height: 180px;
       transform: translate(-50%, -50%);
       border: 2px solid lime;
+      border-radius: 12px;
       box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
-      border-radius: 10px;
-      cursor: move;
-      touch-action: none;
+      pointer-events: none;
     }
 
-    /* resize handle */
+    /* BIG RESIZE HANDLE */
     #handle {
       position: absolute;
-      width: 14px;
-      height: 14px;
-      right: -7px;
-      bottom: -7px;
+      width: 26px;
+      height: 26px;
+      right: -13px;
+      bottom: -13px;
       background: lime;
       border-radius: 50%;
-      cursor: nwse-resize;
+      pointer-events: none; /* ROI is fixed, no interaction anymore */
     }
 
+    /* =========================
+       UI
+    ========================= */
     #status {
       position: fixed;
       bottom: 20px;
@@ -58,6 +65,7 @@
       text-align: center;
       color: white;
       font-family: Arial;
+      font-size: 18px;
     }
 
     #name {
@@ -68,6 +76,9 @@
       color: white;
       font-family: Arial;
     }
+
+    .ok { color: lime; }
+    .bad { color: red; }
   </style>
 </head>
 
@@ -79,6 +90,8 @@
   <div id="handle"></div>
 </div>
 
+<canvas id="canvas" style="display:none;"></canvas>
+
 <div id="status">Starting...</div>
 <div id="name"></div>
 
@@ -89,112 +102,74 @@ const SCRIPT_URL =
 
 let codeReader;
 let scanning = true;
+let lastScan = 0;
 
 /* =========================
-   ROI STATE (normalized)
+   PARSE PDF417 STRUCTURE
 ========================= */
 
-let roi = {
-  x: 0.5,
-  y: 0.5,
-  w: 0.3,
-  h: 0.25
-};
+function parseDNI(raw) {
 
-/* =========================
-   ROI ELEMENTS
-========================= */
+  const p = raw.split("@");
 
-const roiEl = document.getElementById("roi");
-const handle = document.getElementById("handle");
-
-/* =========================
-   DRAG BOX
-========================= */
-
-let dragging = false;
-let resizing = false;
-let startX, startY, startW, startH, startLeft, startTop;
-
-roiEl.addEventListener("pointerdown", (e) => {
-  if (e.target === handle) return;
-
-  dragging = true;
-  startX = e.clientX;
-  startY = e.clientY;
-
-  const rect = roiEl.getBoundingClientRect();
-  startLeft = rect.left;
-  startTop = rect.top;
-});
-
-handle.addEventListener("pointerdown", (e) => {
-  resizing = true;
-  startX = e.clientX;
-  startY = e.clientY;
-
-  const rect = roiEl.getBoundingClientRect();
-  startW = rect.width;
-  startH = rect.height;
-
-  e.stopPropagation();
-});
-
-window.addEventListener("pointermove", (e) => {
-
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-
-  const rect = roiEl.getBoundingClientRect();
-
-  if (dragging) {
-
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-
-    roiEl.style.left = (startLeft + dx + rect.width / 2) + "px";
-    roiEl.style.top = (startTop + dy + rect.height / 2) + "px";
-
-    updateROI();
-  }
-
-  if (resizing) {
-
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-
-    roiEl.style.width = Math.max(100, startW + dx) + "px";
-    roiEl.style.height = Math.max(80, startH + dy) + "px";
-
-    updateROI();
-  }
-});
-
-window.addEventListener("pointerup", () => {
-  dragging = false;
-  resizing = false;
-});
-
-/* =========================
-   UPDATE ROI NORMALIZED
-========================= */
-
-function updateROI() {
-
-  const rect = roiEl.getBoundingClientRect();
-
-  roi = {
-    x: (rect.left + rect.width / 2) / window.innerWidth,
-    y: (rect.top + rect.height / 2) / window.innerHeight,
-    w: rect.width / window.innerWidth,
-    h: rect.height / window.innerHeight
+  return {
+    dni: p[4] || "",
+    apellido: p[1] || "",
+    nombre: p[2] || ""
   };
-
-  console.log("ROI:", roi);
 }
 
 /* =========================
-   START CAMERA + ZXING
+   GET ROI RECT
+========================= */
+
+function getROI() {
+
+  const roi = document.getElementById("roi").getBoundingClientRect();
+  const video = document.getElementById("video");
+
+  return {
+    x: roi.left,
+    y: roi.top,
+    w: roi.width,
+    h: roi.height,
+    vw: video.videoWidth,
+    vh: video.videoHeight
+  };
+}
+
+/* =========================
+   CROPPED FRAME CAPTURE
+========================= */
+
+function captureROIFrame(video) {
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+
+  const roi = document.getElementById("roi").getBoundingClientRect();
+
+  const scaleX = vw / window.innerWidth;
+  const scaleY = vh / window.innerHeight;
+
+  const sx = roi.left * scaleX;
+  const sy = roi.top * scaleY;
+  const sw = roi.width * scaleX;
+  const sh = roi.height * scaleY;
+
+  canvas.width = sw;
+  canvas.height = sh;
+
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  return canvas;
+}
+
+/* =========================
+   START
 ========================= */
 
 async function start() {
@@ -216,24 +191,84 @@ async function start() {
 
   document.getElementById("status").textContent = "Scanning...";
 
-  codeReader.decodeFromVideoDevice(
-    null,
-    video,
-    (result) => {
+  setInterval(() => {
 
-      if (result && scanning) {
+    if (!scanning) return;
+
+    const now = Date.now();
+    if (now - lastScan < 400) return;
+    lastScan = now;
+
+    const canvas = captureROIFrame(video);
+
+    codeReader.decodeFromCanvas(canvas)
+      .then(result => {
 
         scanning = false;
 
-        document.getElementById("status").textContent =
-          "Detected (ROI not applied yet)";
+        const data = parseDNI(result.getText());
+
+        send(data);
 
         setTimeout(() => scanning = true, 1200);
-      }
 
-    }
-  );
+      })
+      .catch(() => {
+        // ignore decode failures
+      });
+
+  }, 120);
+
 }
+
+/* =========================
+   SEND
+========================= */
+
+function send(data) {
+
+  document.getElementById("status").textContent = "Processing...";
+
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    body: JSON.stringify(data),
+    headers: {
+      "Content-Type": "text/plain"
+    }
+  })
+  .then(r => r.json())
+  .then(show)
+  .catch(e => {
+    document.getElementById("status").textContent = e.toString();
+  });
+}
+
+/* =========================
+   UI
+========================= */
+
+function show(res) {
+
+  if (res.status === "OK") {
+
+    document.getElementById("status").className = "ok";
+    document.getElementById("status").textContent = "OK";
+
+    document.getElementById("name").textContent =
+      res.nombre + " " + res.apellido;
+
+  } else {
+
+    document.getElementById("status").className = "bad";
+    document.getElementById("status").textContent = "NOT FOUND";
+
+    document.getElementById("name").textContent = "";
+  }
+}
+
+/* =========================
+   INIT
+========================= */
 
 start();
 
