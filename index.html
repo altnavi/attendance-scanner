@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Attendance Scanner</title>
+
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    video {
+      width: 90%;
+      max-width: 500px;
+      border: 1px solid #ccc;
+    }
+
+    .ok { color: green; }
+    .bad { color: red; }
+  </style>
+
+</head>
+
+<body>
+
+<h2>Attendance Scanner</h2>
+
+<video id="video" autoplay playsinline></video>
+
+<h3 id="status">Starting...</h3>
+<p id="name"></p>
+
+<script>
+
+const SCRIPT_URL = "YOUR_SCRIPT_URL";
+
+let codeReader;
+
+async function startScanner() {
+
+  const video = document.getElementById("video");
+
+  codeReader = new ZXing.BrowserPDF417Reader();
+
+  try {
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }
+    });
+
+    video.srcObject = stream;
+
+    codeReader.decodeFromVideoDevice(null, video, (result, err) => {
+
+      if (result) {
+        handleScan(result.getText());
+      }
+
+    });
+
+    document.getElementById("status").textContent = "Scanning...";
+
+  } catch (err) {
+
+    document.getElementById("status").textContent =
+      err.name + ": " + err.message;
+
+  }
+}
+
+function handleScan(text) {
+
+  document.getElementById("status").textContent = "Processing...";
+
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    body: JSON.stringify({ barcode: text }),
+    headers: {
+      "Content-Type": "text/plain"
+    }
+  })
+  .then(r => r.json())
+  .then(showResult)
+  .catch(err => {
+    document.getElementById("status").textContent = err.toString();
+  });
+
+}
+
+function showResult(res) {
+
+  if (res.status === "OK") {
+    document.getElementById("status").className = "ok";
+    document.getElementById("status").textContent = "OK";
+    document.getElementById("name").textContent =
+      res.nombre + " " + res.apellido;
+  } else {
+    document.getElementById("status").className = "bad";
+    document.getElementById("status").textContent = "NOT FOUND";
+    document.getElementById("name").textContent = "";
+  }
+
+}
+
+startScanner();
+
+</script>
+
+</body>
+</html>
