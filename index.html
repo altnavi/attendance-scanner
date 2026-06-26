@@ -155,7 +155,7 @@ Message: ${lastMessage}`;
 
     }
 
-    function loop() {
+    async function loop() {
 
       if (!scanning)
         return;
@@ -179,19 +179,15 @@ Message: ${lastMessage}`;
           debugCanvas.height
         );
 
-        const luminance =
-          new ZXing.HTMLCanvasElementLuminanceSource(canvas);
 
-        const bitmap =
-          new ZXing.BinaryBitmap(
-            new ZXing.HybridBinarizer(luminance)
-          );
 
         decodeCount++;
 
         status("Scanning...");
 
-        const result = reader.decode(bitmap);
+        status("Decoding...");
+        const result = await reader.decodeFromCanvas(canvas);
+        status("Decoded");
 
         scanning = false;
 
@@ -282,21 +278,7 @@ Message: ${lastMessage}`;
 
       await video.play();
 
-      reader = new ZXing.MultiFormatReader();
-
-      const hints = new Map();
-
-      hints.set(
-        ZXing.DecodeHintType.POSSIBLE_FORMATS,
-        [ZXing.BarcodeFormat.PDF_417]
-      );
-
-      hints.set(
-        ZXing.DecodeHintType.TRY_HARDER,
-        true
-      );
-
-      reader.setHints(hints);
+      reader = new ZXing.BrowserPDF417Reader();
 
       status("Scanning...");
 
