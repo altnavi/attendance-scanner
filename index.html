@@ -34,13 +34,19 @@
       pointer-events: none;
     }
 
+    #canvas {
+      display: none;
+    }
+
     #status {
       position: fixed;
       bottom: 20px;
       width: 100%;
       text-align: center;
       color: white;
-      font-family: Arial;
+      font-family: Arial, sans-serif;
+      font-weight: bold;
+      text-shadow: 1px 1px 2px black;
     }
 
     #name {
@@ -49,11 +55,13 @@
       width: 100%;
       text-align: center;
       color: white;
-      font-family: Arial;
+      font-family: Arial, sans-serif;
+      font-weight: bold;
+      text-shadow: 1px 1px 2px black;
     }
 
-    .ok { color: lime; }
-    .bad { color: red; }
+    .ok { color: lime !important; }
+    .bad { color: red !important; }
   </style>
 </head>
 
@@ -107,9 +115,9 @@ function setStatus(t, cls="") {
 function parseDNI(raw) {
   const p = raw.split("@");
   return {
-    dni: p[4] || "",
-    apellido: p[1] || "",
-    nombre: p[2] || ""
+    dni: (p[4] || "").trim(),
+    apellido: (p[1] || "").trim(),
+    nombre: (p[2] || "").trim()
   };
 }
 
@@ -118,7 +126,6 @@ function parseDNI(raw) {
 ========================= */
 
 function getCrop() {
-
   const rect = video.getBoundingClientRect();
   const roi = roiEl.getBoundingClientRect();
 
@@ -138,7 +145,6 @@ function getCrop() {
 ========================= */
 
 function capture() {
-
   const { sx, sy, sw, sh } = getCrop();
 
   const DOWNSCALE = 1.0;
@@ -162,7 +168,6 @@ function capture() {
 ========================= */
 
 function send(data) {
-
   setStatus("Processing...");
 
   fetch(SCRIPT_URL, {
@@ -172,7 +177,6 @@ function send(data) {
   })
   .then(r => r.json())
   .then(res => {
-
     if (res.status === "OK") {
       setStatus("OK", "ok");
       nameEl.textContent = res.nombre + " " + res.apellido;
@@ -181,45 +185,54 @@ function send(data) {
       nameEl.textContent = "";
     }
 
+    // Reactivate scanner and kickstart the loop again
     scanning = true;
+    loop();
   })
   .catch(e => {
     setStatus(e.toString(), "bad");
     scanning = true;
+    loop();
   });
 }
 
 /* =========================
-   SCAN LOOP (CLEAN)
+   SCAN LOOP (STABLE ASYNC)
 ========================= */
 
 function loop() {
-
   if (!scanning) return;
 
+  // Wait if the camera stream elements haven't initialized layout sizes yet
+  if (video.videoWidth === 0 || video.videoHeight === 0) {
+    requestAnimationFrame(loop);
+    return;
+  }
+
   try {
+    const croppedCanvas = capture();
 
-    const canvas = capture();
-
-    reader.decodeFromCanvas(canvas)
+    reader.decodeFromCanvas(croppedCanvas)
       .then(result => {
-
-        scanning = false;
-
+        scanning = false; // Immediately stop further loop triggers
         const data = parseDNI(result.getText());
-
         send(data);
-
       })
       .catch(() => {
-        // ignore no scan
+        // No barcode detected in this frame.
+        // Wait 150ms before grabbing the next one to minimize CPU thrashing.
+        if (scanning) {
+          setTimeout(loop, 150);
+        }
       });
 
   } catch (e) {
     console.error(e);
+    // If a hard failure happens, try to recover after 1 second
+    if (scanning) {
+      setTimeout(loop, 1000);
+    }
   }
-
-  requestAnimationFrame(loop);
 }
 
 /* =========================
@@ -227,25 +240,29 @@ function loop() {
 ========================= */
 
 async function start() {
+  setStatus("Starting camera...");
 
-  setStatus("Starting...");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    });
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: "environment",
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
-    }
-  });
+    video.srcObject = stream;
+    await video.play();
 
-  video.srcObject = stream;
-  await video.play();
+    reader = new ZXing.BrowserMultiFormatReader();
 
-  reader = new ZXing.BrowserMultiFormatReader();
+    setStatus("Scanning...");
+    loop();
 
-  setStatus("Scanning...");
-
-  loop();
+  } catch (err) {
+    console.error(err);
+    setStatus("Camera error: " + err.message, "bad");
+  }
 }
 
 start();
