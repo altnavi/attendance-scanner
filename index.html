@@ -97,6 +97,9 @@ const SCRIPT_URL =
 let reader;
 let isProcessingFrame = false;
 let scanning = true;
+let lastError = "";
+let lastMessage = "";
+let decodeCount = 0;
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
@@ -107,8 +110,14 @@ const roiEl = document.getElementById("roi");
 const statusEl = document.getElementById("status");
 const nameEl = document.getElementById("name");
 
+
 function setStatus(t, cls="") {
-  statusEl.textContent = t;
+  statusEl.textContent =
+    t +
+    "\nFrames: " + decodeCount +
+    "\nError: " + lastError +
+    "\n" + lastMessage;
+
   statusEl.className = cls;
 }
 
@@ -219,6 +228,8 @@ function loop() {
     const bitmap = new ZXing.BinaryBitmap(binarizer);
 
     // 3. Directly invoke core decode method (universal across all library builds)
+    decodeCount++;
+    setStatus("Scanning...");
     const result = reader.decode(bitmap);
 
     scanning = false;
