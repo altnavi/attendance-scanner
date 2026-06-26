@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>DNI Scanner - Native WebAssembly Engine</title>
+  <title>DNI Scanner - WebAssembly Engine</title>
 
   <script src="https://cdn.jsdelivr.net/npm/zxing-cpp@0.4.3/dist/zxing_reader.js"></script>
 
@@ -25,11 +25,11 @@
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 85vw;
-      height: 4px;
+      width: 80vw;
+      height: 2px;
       background: lime;
       transform: translate(-50%, -50%);
-      box-shadow: 0 0 12px lime;
+      box-shadow: 0 0 10px lime;
       pointer-events: none;
     }
 
@@ -114,44 +114,38 @@ async function loop() {
 
   isProcessingFrame = true;
 
-  // Downsample to an optimal bounding resolution (e.g., 1024x576)
-  // This drastically optimizes pixel matching density for PDF417 row heuristics
-  const targetWidth = 1024;
-  const targetHeight = Math.floor(video.videoHeight * (targetWidth / video.videoWidth));
-  
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-
-  // Clear previous frame buffer maps
-  ctx.clearRect(0, 0, targetWidth, targetHeight);
-  ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+  // Capture the frame details
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.drawImage(video, 0, 0, w, h);
 
   try {
-    const imgData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+    // Extract raw image byte data array
+    const imgData = ctx.getImageData(0, 0, w, h);
     
-    // Explicit format specifications array matching native binding expectations
-    const decodeOptions = {
-      formats: ["PDF417"],
+    // Call the C++ WebAssembly module directly using correct options syntax for 0.4.3
+    const result = zxingModule.readBarcodeFromRGBA(imgData.data, w, h, {
+      formats: "PDF417", // Single string parameter preferred by early bindings wrapper
       tryHarder: true,
       tryRotate: true
-    };
-
-    // Execute passing standard compiled Uint8ClampedArray directly down to C++ memory
-    const result = zxingModule.readBarcodeFromRGBA(imgData, decodeOptions);
+    });
 
     if (result && result.isValid) {
       scanning = false;
       const data = parseDNI(result.text);
       send(data);
     } else {
+      // Release execution lock to cycle immediately if no code found
       isProcessingFrame = false;
       requestAnimationFrame(loop);
     }
 
   } catch (error) {
-    console.warn("WASM Skip frame block: ", error);
+    console.error("WASM decoding crash: ", error);
     isProcessingFrame = false;
-    requestAnimationFrame(loop);
+    setTimeout(loop, 250);
   }
 }
 
@@ -199,10 +193,11 @@ function send(data) {
 ========================= */
 async function start() {
   try {
-    // Instantiate module binding reference wrapper
+    // 1. Initialize the C++ WebAssembly Module
     zxingModule = await ZXingReader();
     setStatus("Camera initializing...");
 
+    // 2. Spin up high-res video feed
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "environment",
