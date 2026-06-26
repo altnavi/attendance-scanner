@@ -21,12 +21,12 @@
       object-fit: cover;
     }
 
-    #roi {
+   #roi {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 600px;
-      height: 360px;
+      width: 500px;   /* Slightly narrower width */
+      height: 150px;  /* Much shorter height */
       transform: translate(-50%, -50%);
       border: 2px solid lime;
       box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
@@ -35,7 +35,13 @@
     }
 
     #canvas {
-      display: none;
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      width: 150px;
+      height: auto;
+      z-index: 999;
+      border: 1px solid white;
     }
 
     #status {
@@ -246,15 +252,17 @@ async function start() {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "environment",
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        width: { ideal: 1920, min: 1280 },
+        height: { ideal: 1080, min: 720 }
       }
     });
 
     video.srcObject = stream;
     await video.play();
 
-    reader = new ZXing.BrowserMultiFormatReader();
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
+    reader = new ZXing.BrowserMultiFormatReader(hints);
 
     setStatus("Scanning...");
     loop();
