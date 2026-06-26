@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Attendance Scanner</title>
+  <title>Scanner</title>
 
   <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@latest/umd/index.min.js"></script>
 
@@ -15,9 +15,6 @@
       overflow: hidden;
     }
 
-    /* =========================
-       CAMERA
-    ========================= */
     #video {
       position: fixed;
       top: 0;
@@ -28,36 +25,31 @@
     }
 
     /* =========================
-       CENTER ROI (FIXED)
+       ROI (CENTERED ONLY)
     ========================= */
     #roi {
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 300px;
-      height: 180px;
-      transform: translate(-50%, -50%);
       border: 2px solid lime;
-      border-radius: 12px;
+      border-radius: 10px;
       box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
-      pointer-events: none;
+      transform: translate(-50%, -50%);
+      touch-action: none;
     }
 
-    /* BIG RESIZE HANDLE */
+    /* BIG HANDLE */
     #handle {
       position: absolute;
-      width: 26px;
-      height: 26px;
-      right: -13px;
-      bottom: -13px;
+      width: 30px;
+      height: 30px;
+      right: -15px;
+      bottom: -15px;
       background: lime;
       border-radius: 50%;
-      pointer-events: none; /* ROI is fixed, no interaction anymore */
+      touch-action: none;
     }
 
-    /* =========================
-       UI
-    ========================= */
     #status {
       position: fixed;
       bottom: 20px;
@@ -65,7 +57,6 @@
       text-align: center;
       color: white;
       font-family: Arial;
-      font-size: 18px;
     }
 
     #name {
@@ -97,21 +88,86 @@
 
 <script>
 
-const SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
-
-let codeReader;
-let scanning = true;
-let lastScan = 0;
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
 /* =========================
-   PARSE PDF417 STRUCTURE
+   ENGINE ABSTRACTION
+========================= */
+
+const Engine = {
+  ZXING: "zxing_js",
+  WASM: "wasm_placeholder"
+};
+
+let currentEngine = Engine.ZXING;
+
+/* =========================
+   ROI STATE (CENTER + SIZE ONLY)
+========================= */
+
+let roiState = {
+  w: 300,
+  h: 180
+};
+
+const roi = document.getElementById("roi");
+const handle = document.getElementById("handle");
+
+/* =========================
+   APPLY ROI STYLE
+========================= */
+
+function renderROI() {
+  roi.style.width = roiState.w + "px";
+  roi.style.height = roiState.h + "px";
+}
+
+renderROI();
+
+/* =========================
+   RESIZE (FIXED, SIMPLE, STABLE)
+========================= */
+
+let resizing = false;
+let startX = 0;
+let startY = 0;
+let startW = 0;
+let startH = 0;
+
+handle.addEventListener("pointerdown", (e) => {
+  resizing = true;
+  handle.setPointerCapture(e.pointerId);
+
+  startX = e.clientX;
+  startY = e.clientY;
+
+  startW = roiState.w;
+  startH = roiState.h;
+});
+
+window.addEventListener("pointermove", (e) => {
+
+  if (!resizing) return;
+
+  const dx = e.clientX - startX;
+  const dy = e.clientY - startY;
+
+  roiState.w = Math.max(120, startW + dx);
+  roiState.h = Math.max(80, startH + dy);
+
+  renderROI();
+});
+
+window.addEventListener("pointerup", () => {
+  resizing = false;
+});
+
+/* =========================
+   PARSER
 ========================= */
 
 function parseDNI(raw) {
-
   const p = raw.split("@");
-
   return {
     dni: p[4] || "",
     apellido: p[1] || "",
@@ -120,56 +176,15 @@ function parseDNI(raw) {
 }
 
 /* =========================
-   GET ROI RECT
+   ZXING ENGINE (CURRENT)
 ========================= */
 
-function getROI() {
-
-  const roi = document.getElementById("roi").getBoundingClientRect();
-  const video = document.getElementById("video");
-
-  return {
-    x: roi.left,
-    y: roi.top,
-    w: roi.width,
-    h: roi.height,
-    vw: video.videoWidth,
-    vh: video.videoHeight
-  };
-}
+let codeReader;
+let scanning = true;
+let lastScan = 0;
 
 /* =========================
-   CROPPED FRAME CAPTURE
-========================= */
-
-function captureROIFrame(video) {
-
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
-
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-
-  const roi = document.getElementById("roi").getBoundingClientRect();
-
-  const scaleX = vw / window.innerWidth;
-  const scaleY = vh / window.innerHeight;
-
-  const sx = roi.left * scaleX;
-  const sy = roi.top * scaleY;
-  const sw = roi.width * scaleX;
-  const sh = roi.height * scaleY;
-
-  canvas.width = sw;
-  canvas.height = sh;
-
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-
-  return canvas;
-}
-
-/* =========================
-   START
+   CAMERA + SCAN LOOP
 ========================= */
 
 async function start() {
@@ -199,30 +214,24 @@ async function start() {
     if (now - lastScan < 400) return;
     lastScan = now;
 
-    const canvas = captureROIFrame(video);
+    codeReader.decodeFromVideoDevice(null, video, (result) => {
 
-    codeReader.decodeFromCanvas(canvas)
-      .then(result => {
+      if (!result || !scanning) return;
 
-        scanning = false;
+      scanning = false;
 
-        const data = parseDNI(result.getText());
+      const data = parseDNI(result.getText());
 
-        send(data);
+      send(data);
 
-        setTimeout(() => scanning = true, 1200);
+      setTimeout(() => scanning = true, 1200);
+    });
 
-      })
-      .catch(() => {
-        // ignore decode failures
-      });
-
-  }, 120);
-
+  }, 150);
 }
 
 /* =========================
-   SEND
+   BACKEND
 ========================= */
 
 function send(data) {
@@ -263,6 +272,18 @@ function show(res) {
     document.getElementById("status").textContent = "NOT FOUND";
 
     document.getElementById("name").textContent = "";
+  }
+}
+
+/* =========================
+   ENGINE SWITCH (READY FOR WASM)
+========================= */
+
+function switchEngine(newEngine) {
+  currentEngine = newEngine;
+
+  if (newEngine === Engine.WASM) {
+    console.log("WASM engine not plugged yet");
   }
 }
 
