@@ -2,9 +2,9 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>DNI Scanner - WebAssembly Engine</title>
+  <title>DNI Decoder Standard</title>
 
-<script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
 
   <style>
     html, body {
@@ -25,12 +25,17 @@
       position: fixed;
       top: 50%;
       left: 50%;
-      width: 80vw;
-      height: 2px;
-      background: lime;
+      width: 500px;
+      height: 150px;
       transform: translate(-50%, -50%);
-      box-shadow: 0 0 10px lime;
+      border: 3px solid lime;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
+      border-radius: 8px;
       pointer-events: none;
+    }
+
+    #canvas {
+      display: none; 
     }
 
     #status {
@@ -67,9 +72,9 @@
 <video id="video" autoplay playsinline></video>
 <div id="roi"></div>
 
-<canvas id="canvas" style="display:none;"></canvas>
+<canvas id="canvas"></canvas>
 
-<div id="status">Loading WASM Engine...</div>
+<div id="status">Starting Engine...</div>
 <div id="name"></div>
 
 <script>
@@ -77,13 +82,17 @@
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
-let zxingModule;
+/* =========================
+   STATE
+========================= */
+let reader;
 let isProcessingFrame = false;
 let scanning = true;
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const ctx = canvas.getContext("2d");
+const roiEl = document.getElementById("roi");
 const statusEl = document.getElementById("status");
 const nameEl = document.getElementById("name");
 
@@ -102,51 +111,66 @@ function parseDNI(raw) {
 }
 
 /* =========================
-   SEQUENTIAL WASM SCAN LOOP
+   CROP MATH (OBJECT-FIT COVER PROOF)
 ========================= */
-async function loop() {
-  if (!scanning || isProcessingFrame) return;
+function getCropCoordinates() {
+  const videoWidth = video.videoWidth;
+  const videoHeight = video.videoHeight;
+  const rect = video.getBoundingClientRect();
 
-  if (video.videoWidth === 0 || video.videoHeight === 0) {
-    requestAnimationFrame(loop);
-    return;
+  const videoRatio = videoWidth / videoHeight;
+  const elementRatio = rect.width / rect.height;
+
+  let scale, implicitWidth, implicitHeight;
+
+  if (elementRatio > videoRatio) {
+    scale = rect.width / videoWidth;
+    implicitWidth = rect.width;
+    implicitHeight = rect.width / videoRatio;
+  } else {
+    scale = rect.height / videoHeight;
+    implicitWidth = rect.height * videoRatio;
+    implicitHeight = rect.height;
   }
 
-  isProcessingFrame = true;
+  const videoLeft = rect.left + (rect.width - implicitWidth) / 2;
+  const videoTop = rect.top + (rect.height - implicitHeight) / 2;
+  const roi = roiEl.getBoundingClientRect();
 
-  // Capture the frame details
-  const w = video.videoWidth;
-  const h = video.videoHeight;
-  canvas.width = w;
-  canvas.height = h;
-  ctx.drawImage(video, 0, 0, w, h);
+  return {
+    sx: (roi.left - videoLeft) / scale,
+    sy: (roi.top - videoTop) / scale,
+    sw: roi.width / scale,
+    sh: roi.height / scale
+  };
+}
 
-  try {
-    // Extract raw image byte data array
-    const imgData = ctx.getImageData(0, 0, w, h);
-    
-    // Call the C++ WebAssembly module directly using correct options syntax for 0.4.3
-    const result = zxingModule.readBarcodeFromRGBA(imgData.data, w, h, {
-      formats: "PDF417", // Single string parameter preferred by early bindings wrapper
-      tryHarder: true,
-      tryRotate: true
-    });
+/* =========================
+   CAPTURE AND RESCALE IMAGE
+========================= */
+function processAndCaptureFrame() {
+  const { sx, sy, sw, sh } = getCropCoordinates();
 
-    if (result && result.isValid) {
-      scanning = false;
-      const data = parseDNI(result.text);
-      send(data);
-    } else {
-      // Release execution lock to cycle immediately if no code found
-      isProcessingFrame = false;
-      requestAnimationFrame(loop);
-    }
+  if (sw <= 0 || sh <= 0 || isNaN(sx) || isNaN(sy)) return false;
 
-  } catch (error) {
-    console.error("WASM decoding crash: ", error);
-    isProcessingFrame = false;
-    setTimeout(loop, 250);
-  }
+  // Multiply resolution to avoid bar pixel compression artifacts
+  const RESOLUTION_MULTIPLIER = 3.0;
+
+  canvas.width = sw * RESOLUTION_MULTIPLIER;
+  canvas.height = sh * RESOLUTION_MULTIPLIER;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  // Pre-process for clean edges
+  ctx.filter = "contrast(1.4) grayscale(1)";
+
+  ctx.drawImage(
+    video,
+    sx, sy, sw, sh,
+    0, 0, canvas.width, canvas.height
+  );
+
+  return true;
 }
 
 /* =========================
@@ -189,15 +213,47 @@ function send(data) {
 }
 
 /* =========================
-   INITIALIZE WEBCAM & WASM
+   STABLE SEQUENTIAL SCAN LOOP
+========================= */
+function loop() {
+  if (!scanning || isProcessingFrame) return;
+
+  if (video.videoWidth === 0 || video.videoHeight === 0) {
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  isProcessingFrame = true;
+
+  if (!processAndCaptureFrame()) {
+    isProcessingFrame = false;
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  // Pass our standardized clean upscale canvas to the JS reader engine
+  reader.decodeFromCanvas(canvas)
+    .then(result => {
+      scanning = false; // Freeze immediately upon discovery
+      const data = parseDNI(result.getText());
+      send(data);
+    })
+    .catch(() => {
+      // Loop releases execution lock cleanly if frame doesn't yield a result
+      isProcessingFrame = false;
+      if (scanning) {
+        setTimeout(loop, 150);
+      }
+    });
+}
+
+/* =========================
+   INITIALIZATION
 ========================= */
 async function start() {
-  try {
-    // 1. Initialize the C++ WebAssembly Module
-    zxingModule = await ZXingReader();
-    setStatus("Camera initializing...");
+  setStatus("Starting Camera...");
 
-    // 2. Spin up high-res video feed
+  try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "environment",
@@ -209,12 +265,20 @@ async function start() {
     video.srcObject = stream;
     await video.play();
 
+    // Bound hints to force engine computational processing only over PDF417 structures
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+    // Properly initializing the pure JS reader
+    reader = new ZXing.BrowserMultiFormatReader(hints);
+
     setStatus("Scanning...");
     loop();
 
   } catch (err) {
     console.error(err);
-    setStatus("Initialization error: " + err.message, "bad");
+    setStatus("Camera initialization failed: " + err.message, "bad");
   }
 }
 
