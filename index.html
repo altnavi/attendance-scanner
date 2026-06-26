@@ -160,40 +160,36 @@ Message: ${lastMessage}`;
       if (!scanning)
         return;
 
-      if (!video.videoWidth) {
-
-        setTimeout(loop, 100);
-        return;
-
-      }
-
-      allocateCanvases();
-
-      ctx.drawImage(video, 0, 0);
-
-      debugCtx.drawImage(
-        canvas,
-        0,
-        0,
-        debugCanvas.width,
-        debugCanvas.height
-      );
-
       try {
 
-        lastError = "";
-        lastMessage = "";
+        if (!video.videoWidth) {
+          setTimeout(loop, 100);
+          return;
+        }
 
-        const luminance = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+        allocateCanvases();
 
-        const bitmap = new ZXing.BinaryBitmap(
-          new ZXing.HybridBinarizer(luminance)
+        ctx.drawImage(video, 0, 0);
+
+        debugCtx.drawImage(
+          canvas,
+          0,
+          0,
+          debugCanvas.width,
+          debugCanvas.height
         );
+
+        const luminance =
+          new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+
+        const bitmap =
+          new ZXing.BinaryBitmap(
+            new ZXing.HybridBinarizer(luminance)
+          );
 
         decodeCount++;
 
-        if (decodeCount % 10 === 0)
-          status("Scanning...");
+        status("Scanning...");
 
         const result = reader.decode(bitmap);
 
@@ -206,15 +202,16 @@ Message: ${lastMessage}`;
 
         send(data);
 
-      }
-      catch (err) {
+        return;
+
+      } catch (err) {
 
         lastError = err.name || "";
         lastMessage = err.message || "";
 
-        setTimeout(loop, 120);
-
       }
+
+      setTimeout(loop, 120);
 
     }
 
