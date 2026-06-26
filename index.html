@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html>
 <head>
   <meta charset="utf-8" />
@@ -23,7 +22,6 @@
     .ok { color: green; }
     .bad { color: red; }
   </style>
-
 </head>
 
 <body>
@@ -37,15 +35,15 @@
 
 <script>
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
+const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
 let codeReader;
+let scanning = false;
 
 async function startScanner() {
 
   const video = document.getElementById("video");
-
-  codeReader = new ZXing.BrowserPDF417Reader();
 
   try {
 
@@ -55,13 +53,32 @@ async function startScanner() {
 
     video.srcObject = stream;
 
-    codeReader.decodeFromVideoDevice(null, video, (result, err) => {
+    // --- ZXing setup (FIXED) ---
+    const hints = new Map();
+    hints.set(
+      ZXing.DecodeHintType.POSSIBLE_FORMATS,
+      [ZXing.BarcodeFormat.PDF_417]
+    );
 
-      if (result) {
-        handleScan(result.getText());
+    codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+    scanning = true;
+
+    codeReader.decodeFromVideoDevice(
+      undefined,
+      video,
+      (result, err) => {
+
+        if (result && scanning) {
+          scanning = false;
+          handleScan(result.getText());
+
+          // restart scan after delay
+          setTimeout(() => scanning = true, 1500);
+        }
+
       }
-
-    });
+    );
 
     document.getElementById("status").textContent = "Scanning...";
 
@@ -95,16 +112,21 @@ function handleScan(text) {
 function showResult(res) {
 
   if (res.status === "OK") {
+
     document.getElementById("status").className = "ok";
     document.getElementById("status").textContent = "OK";
+
     document.getElementById("name").textContent =
       res.nombre + " " + res.apellido;
+
   } else {
+
     document.getElementById("status").className = "bad";
     document.getElementById("status").textContent = "NOT FOUND";
-    document.getElementById("name").textContent = "";
-  }
 
+    document.getElementById("name").textContent = "";
+
+  }
 }
 
 startScanner();
