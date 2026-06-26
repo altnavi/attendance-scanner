@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <title>Scanner</title>
 
-<script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
+  <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
+
   <style>
     html, body {
       margin: 0;
-      padding: 0;
       height: 100%;
       background: black;
       overflow: hidden;
@@ -16,8 +16,6 @@
 
     #video {
       position: fixed;
-      top: 0;
-      left: 0;
       width: 100vw;
       height: 100vh;
       object-fit: cover;
@@ -64,7 +62,7 @@
 <video id="video" autoplay playsinline></video>
 <div id="roi"></div>
 
-<canvas id="canvas" style="display:none;"></canvas>
+<canvas id="canvas"></canvas>
 
 <div id="status">Starting...</div>
 <div id="name"></div>
@@ -74,23 +72,36 @@
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
-let codeReader;
-let scanning = false;
-let lastScan = 0;
-
 /* =========================
-   DEBUG STATUS
+   STATE
 ========================= */
 
-function setStatus(msg, cls="") {
-  const el = document.getElementById("status");
-  el.textContent = msg;
-  el.className = cls;
-  console.log("[STATUS]", msg);
+let reader;
+let scanning = true;
+
+/* =========================
+   ELEMENTS (CACHE ONCE)
+========================= */
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const roiEl = document.getElementById("roi");
+
+const statusEl = document.getElementById("status");
+const nameEl = document.getElementById("name");
+
+/* =========================
+   STATUS
+========================= */
+
+function setStatus(t, cls="") {
+  statusEl.textContent = t;
+  statusEl.className = cls;
 }
 
 /* =========================
-   PARSER
+   PARSE PDF417
 ========================= */
 
 function parseDNI(raw) {
@@ -103,15 +114,12 @@ function parseDNI(raw) {
 }
 
 /* =========================
-   ROI CROP + DOWNSCALE
+   ROI CROP (FIXED)
 ========================= */
 
-function captureROI(video) {
+function getCrop() {
 
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
-
-  const roi = document.getElementById("roi").getBoundingClientRect();
+  const r = roiEl.getBoundingClientRect();
 
   const vw = video.videoWidth;
   const vh = video.videoHeight;
@@ -119,111 +127,40 @@ function captureROI(video) {
   const scaleX = vw / window.innerWidth;
   const scaleY = vh / window.innerHeight;
 
-  const sx = roi.left * scaleX;
-  const sy = roi.top * scaleY;
-  const sw = roi.width * scaleX;
-  const sh = roi.height * scaleY;
+  const sx = r.left * scaleX;
+  const sy = r.top * scaleY;
+  const sw = r.width * scaleX;
+  const sh = r.height * scaleY;
 
-  const DOWNSCALE = 0.8; // safer for PDF417
+  return { sx, sy, sw, sh };
+}
 
-  const dw = sw * DOWNSCALE;
-  const dh = sh * DOWNSCALE;
+/* =========================
+   CAPTURE FRAME
+========================= */
 
-  canvas.width = dw;
-  canvas.height = dh;
+function capture() {
 
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh);
+  const { sx, sy, sw, sh } = getCrop();
+
+  const DOWNSCALE = 0.8;
+
+  canvas.width = sw * DOWNSCALE;
+  canvas.height = sh * DOWNSCALE;
+
+  ctx.drawImage(
+    video,
+    sx, sy, sw, sh,
+    0, 0,
+    canvas.width,
+    canvas.height
+  );
 
   return canvas;
 }
 
 /* =========================
-   START CAMERA (ROBUST)
-========================= */
-
-async function start() {
-
-  try {
-
-    setStatus("Requesting camera...");
-
-    const video = document.getElementById("video");
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "environment",
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      }
-    });
-
-    setStatus("Camera OK");
-
-    video.srcObject = stream;
-    await video.play();
-
-    setStatus("Initializing decoder...");
-
-    codeReader = new ZXing.BrowserMultiFormatReader();
-
-    setStatus("Scanner ready");
-
-    scanning = true;
-
-    runLoop(video);
-
-  } catch (err) {
-
-    setStatus(err.name + ": " + err.message, "bad");
-    console.error(err);
-  }
-}
-
-/* =========================
-   SCAN LOOP (FORCED START)
-========================= */
-
-function runLoop(video) {
-
-  setStatus("Scanning...");
-
-  setInterval(() => {
-
-    if (!scanning) return;
-
-    const now = Date.now();
-    if (now - lastScan < 500) return;
-    lastScan = now;
-
-    const canvas = captureROI(video);
-
-    try {
-
-      codeReader.decodeFromCanvas(canvas)
-        .then(result => {
-
-          scanning = false;
-
-          const data = parseDNI(result.getText());
-
-          send(data);
-
-          setTimeout(() => scanning = true, 1200);
-
-        })
-        .catch(() => {
-          // ignore no-detect frames
-        });
-
-    } catch (e) {
-      console.error("decode crash", e);
-    }
-
-  }, 120);
-}
-
-/* =========================
-   BACKEND
+   SEND
 ========================= */
 
 function send(data) {
@@ -233,29 +170,85 @@ function send(data) {
   fetch(SCRIPT_URL, {
     method: "POST",
     body: JSON.stringify(data),
-    headers: {
-      "Content-Type": "text/plain"
-    }
+    headers: { "Content-Type": "text/plain" }
   })
   .then(r => r.json())
   .then(res => {
 
     if (res.status === "OK") {
       setStatus("OK", "ok");
-      document.getElementById("name").textContent =
-        res.nombre + " " + res.apellido;
+      nameEl.textContent = res.nombre + " " + res.apellido;
     } else {
       setStatus("NOT FOUND", "bad");
-      document.getElementById("name").textContent = "";
+      nameEl.textContent = "";
     }
 
+    scanning = true;
   })
-  .catch(e => setStatus(e.toString(), "bad"));
+  .catch(e => {
+    setStatus(e.toString(), "bad");
+    scanning = true;
+  });
 }
 
 /* =========================
-   INIT
+   SCAN LOOP (CLEAN)
 ========================= */
+
+function loop() {
+
+  if (!scanning) return;
+
+  try {
+
+    const canvas = capture();
+
+    reader.decodeFromCanvas(canvas)
+      .then(result => {
+
+        scanning = false;
+
+        const data = parseDNI(result.getText());
+
+        send(data);
+
+      })
+      .catch(() => {
+        // ignore no scan
+      });
+
+  } catch (e) {
+    console.error(e);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+/* =========================
+   START
+========================= */
+
+async function start() {
+
+  setStatus("Starting...");
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: "environment",
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  });
+
+  video.srcObject = stream;
+  await video.play();
+
+  reader = new ZXing.BrowserMultiFormatReader();
+
+  setStatus("Scanning...");
+
+  loop();
+}
 
 start();
 
