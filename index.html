@@ -152,13 +152,13 @@ function processAndCaptureFrame() {
 
   if (sw <= 0 || sh <= 0 || isNaN(sx) || isNaN(sy)) return false;
 
-  const RESOLUTION_MULTIPLIER = 3.0;
+  const RESOLUTION_MULTIPLIER = 1.0;
 
   canvas.width = sw * RESOLUTION_MULTIPLIER;
   canvas.height = sh * RESOLUTION_MULTIPLIER;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.filter = "contrast(1.4) grayscale(1)";
+  ctx.filter = "none";
 
   ctx.drawImage(
     video,
@@ -166,7 +166,8 @@ function processAndCaptureFrame() {
     0, 0, canvas.width, canvas.height
   );
 
-  return true;
+  window.open(canvas.toDataURL("image/png"), "_blank");
+  return false;
 }
 
 /* =========================
@@ -243,13 +244,14 @@ function loop() {
     const data = parseDNI(result.getText());
     send(data);
 
-  } catch (err) {
-    // Falls back into loop frame cycles seamlessly when a signature match isn't found
+  } catch(err) {
+    console.log(err);
+
     isProcessingFrame = false;
-    if (scanning) {
-      setTimeout(loop, 120);
-    }
-  }
+
+    if(scanning)
+        setTimeout(loop,120);
+}
 }
 
 /* =========================
