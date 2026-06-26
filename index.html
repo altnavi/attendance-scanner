@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>DNI Scanner - Stable Native Loop</title>
+  <title>DNI Scanner - Production Engine</title>
 
   <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
 
@@ -21,7 +21,6 @@
       object-fit: cover;
     }
 
-    /* Traditional clear scanning window overlay */
     #roi {
       position: fixed;
       top: 50%;
@@ -69,7 +68,7 @@
 <video id="video" playsinline></video>
 <div id="roi"></div>
 
-<div id="status">Initializing Scanner...</div>
+<div id="status">Initializing Engine...</div>
 <div id="name"></div>
 
 <script>
@@ -97,7 +96,7 @@ function parseDNI(raw) {
 }
 
 /* =========================
-   SEND POST TO GOOGLE APPS
+   SEND POST
 ========================= */
 function send(data) {
   setStatus("Processing API...");
@@ -117,81 +116,71 @@ function send(data) {
       nameEl.textContent = "";
     }
     
-    // Resume scanning after a 4-second delay so user can see verification
     setTimeout(() => {
       setStatus("Scanning...");
-      startScanningLoop();
+      startScanner();
     }, 4000);
   })
   .catch(e => {
     setStatus("Error: " + e.toString(), "bad");
     setTimeout(() => {
       setStatus("Scanning...");
-      startScanningLoop();
+      startScanner();
     }, 4000);
   });
 }
 
 /* =========================
-   NATIVE DECODING LOOP
+   STREAM PROCESSING PIPELINE
 ========================= */
-function startScanningLoop() {
-  // Use the canonical public method that natively attaches to video elements
-  reader.decodeFromVideoElement(video, (result, error) => {
+function startScanner() {
+  const constraints = {
+    audio: false,
+    video: {
+      facingMode: "environment",
+      width: { ideal: 1920, min: 1280 },
+      height: { ideal: 1080, min: 720 }
+    }
+  };
+
+  // decodeFromConstraints maps constraints, targeted video element, and continuous frame outputs natively
+  reader.decodeFromConstraints(constraints, video, (result, error) => {
     if (result) {
-      // Barcode recognized successfully! Stop the current instance listener
-      reader.reset(); 
-      
+      reader.reset(); // Disconnect pipeline temporarily to hold layout focus
       setStatus("Code Found!");
+      
       const data = parseDNI(result.getText());
       send(data);
     }
-    
+
     if (error && !(error instanceof ZXing.NotFoundException)) {
-      // Log true compilation/hardware faults, ignoring standard "no barcode seen" loops
-      console.error(error);
+      console.error("Hardware pipeline error:", error);
     }
   });
 }
 
 /* =========================
-   INITIALIZATION ENTRYPOINT
+   INITIALIZATION
 ========================= */
-async function start() {
-  setStatus("Accessing Camera...");
-
+function init() {
   try {
-    // 1. Establish precise processing rules focusing engine constraints onto PDF417 format structures
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
     reader = new ZXing.BrowserMultiFormatReader(hints);
 
-    // 2. Request environmental video hardware directly via explicit Media Stream targets
-    const constraints = {
-      video: {
-        facingMode: "environment",
-        width: { ideal: 1920, min: 1280 },
-        height: { ideal: 1080, min: 720 }
-      }
-    };
-
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = stream;
-    await video.play();
-
     setStatus("Scanning...");
-    startScanningLoop();
+    startScanner();
 
   } catch (err) {
     console.error(err);
-    setStatus("System Fault: " + err.message, "bad");
+    setStatus("Initialization error: " + err.message, "bad");
   }
 }
 
-// Start execution
-start();
+// Fire runtime setup execution
+init();
 
 </script>
 
