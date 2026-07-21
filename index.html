@@ -1,103 +1,119 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DNI Scanner</title>
 
+  <!-- ZXing Multi-Format Engine -->
   <script type="text/javascript" src="https://unpkg.com/@zxing/library@latest"></script>
+  
   <style>
-    html,
-    body {
+    html, body {
       margin: 0;
+      padding: 0;
+      width: 100%;
       height: 100%;
       overflow: hidden;
-      background: black;
+      background: #000;
+      font-family: monospace;
     }
 
+    /* Video stretches to fill viewport while maintaining aspect ratio */
     #video {
       position: fixed;
+      top: 0;
+      left: 0;
       width: 100vw;
       height: 100vh;
       object-fit: cover;
     }
 
+    /* Green target guide overlay */
     #roi {
       position: fixed;
       left: 50%;
       top: 50%;
-      width: 450px;
+      width: 480px;
+      max-width: 85vw;
       height: 160px;
+      max-height: 30vh;
       transform: translate(-50%, -50%);
-      border: 3px solid lime;
+      border: 3px solid #00ff00;
       border-radius: 8px;
-      box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55);
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.65);
       pointer-events: none;
+      z-index: 10;
     }
 
+    /* Offscreen processing canvas */
     #canvas {
       display: none;
     }
 
+    /* Debug crop window in top right */
     #debugCanvas {
       position: fixed;
-      right: 10px;
-      top: 10px;
+      right: 12px;
+      top: 12px;
       width: 220px;
-      border: 2px solid yellow;
-      background: black;
+      border: 2px solid #ffff00;
+      background: #000;
+      z-index: 20;
     }
 
+    /* Status overlay console */
     #status {
       position: fixed;
-      top: 10px;
-      left: 10px;
+      top: 12px;
+      left: 12px;
       right: 250px;
-      background: rgba(0, 0, 0, .65);
-      color: white;
-      padding: 8px;
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      padding: 10px;
       border-radius: 6px;
-      font-family: monospace;
       white-space: pre-wrap;
+      font-size: 13px;
+      z-index: 20;
+      border: 1px solid rgba(255, 255, 255, 0.2);
     }
 
+    /* Decoded result display */
     #name {
       position: fixed;
-      bottom: 50px;
+      bottom: 40px;
       width: 100%;
       text-align: center;
-      color: white;
-      font: bold 20px Arial;
+      color: #fff;
+      font-family: sans-serif;
+      font-size: 22px;
+      font-weight: bold;
+      text-shadow: 0px 2px 4px rgba(0,0,0,0.9);
+      z-index: 20;
     }
 
-    .ok {
-      color: lime;
-    }
-
-    .bad {
-      color: red;
-    }
+    .ok { color: #00ff00 !important; }
+    .bad { color: #ff3333 !important; }
   </style>
 </head>
 
 <body>
 
-  <video id="video" autoplay playsinline></video>
+  <video id="video" autoplay playsinline muted></video>
 
   <div id="roi"></div>
 
   <canvas id="canvas"></canvas>
   <canvas id="debugCanvas"></canvas>
 
-  <div id="status"></div>
+  <div id="status">Initializing...</div>
   <div id="name"></div>
 
   <script>
-
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
     let pdfReader;
-
     let decodeCount = 0;
     let lastError = "";
     let lastMessage = "";
@@ -108,27 +124,30 @@
 
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.imageSmoothingEnabled = false;
 
     const debugCanvas = document.getElementById("debugCanvas");
     const debugCtx = debugCanvas.getContext("2d");
-    debugCtx.imageSmoothingEnabled = false;
 
     const statusEl = document.getElementById("status");
     const nameEl = document.getElementById("name");
 
     function setStatus(text, cssClass = "") {
       statusEl.className = cssClass;
-      statusEl.textContent =
-        `Status : ${text}
-Frames : ${decodeCount}
-Error  : ${lastError}
-Message: ${lastMessage}`;
+      const res = (video.videoWidth && video.videoHeight) 
+        ? `${video.videoWidth}x${video.videoHeight}` 
+        : "Detecting...";
+      
+      statusEl.textContent = 
+        `Status     : ${text}
+Camera Res : ${res}
+Frames     : ${decodeCount}
+Error      : ${lastError}
+Message    : ${lastMessage}`;
     }
 
     function parseDNI(raw) {
       const p = raw.split("@");
-      // Argentine DNI PDF417 format mapping
+      // Format parser for Argentine PDF417 DNI documents
       return {
         dni: p[4]?.trim() || p[1]?.trim() || "",
         apellido: p[1]?.trim() || "",
@@ -136,60 +155,87 @@ Message: ${lastMessage}`;
       };
     }
 
-    // Crops the section of video visible inside the green ROI overlay onto the canvas
-    function captureROI() {
+    /**
+     * Calculates crop bounds in camera stream pixel dimensions 
+     * accounting for CSS object-fit: cover offset.
+     */
+    function getCropGuide() {
       const vWidth = video.videoWidth;
       const vHeight = video.videoHeight;
-
-      if (!vWidth || !vHeight) return false;
+      if (!vWidth || !vHeight) return null;
 
       const roiRect = roi.getBoundingClientRect();
       const videoRect = video.getBoundingClientRect();
 
-      // Calculate scale ratio between object-fit video and real camera feed resolution
-      const scaleX = vWidth / videoRect.width;
-      const scaleY = vHeight / videoRect.height;
+      // Object-fit cover scaling math
+      const scale = Math.max(videoRect.width / vWidth, videoRect.height / vHeight);
+      const visibleWidth = videoRect.width / scale;
+      const visibleHeight = videoRect.height / scale;
 
-      const cropX = Math.max(0, (roiRect.left - videoRect.left) * scaleX);
-      const cropY = Math.max(0, (roiRect.top - videoRect.top) * scaleY);
-      const cropWidth = Math.min(vWidth - cropX, roiRect.width * scaleX);
-      const cropHeight = Math.min(vHeight - cropY, roiRect.height * scaleY);
+      const offsetX = (vWidth - visibleWidth) / 2;
+      const offsetY = (vHeight - visibleHeight) / 2;
 
-      canvas.width = cropWidth;
-      canvas.height = cropHeight;
+      const cropX = Math.round(offsetX + ((roiRect.left - videoRect.left) / scale));
+      const cropY = Math.round(offsetY + ((roiRect.top - videoRect.top) / scale));
+      const cropW = Math.round(roiRect.width / scale);
+      const cropH = Math.round(roiRect.height / scale);
 
-      ctx.drawImage(
-        video,
-        cropX, cropY, cropWidth, cropHeight,
-        0, 0, cropWidth, cropHeight
-      );
+      // Clamp coordinates to camera pixel frame boundaries
+      const safeX = Math.max(0, Math.min(vWidth - 1, cropX));
+      const safeY = Math.max(0, Math.min(vHeight - 1, cropY));
+      const safeW = Math.min(vWidth - safeX, cropW);
+      const safeH = Math.min(vHeight - safeY, cropH);
 
-      // Render debug thumbnail in top-right
-      debugCanvas.width = 220;
-      debugCanvas.height = Math.round(220 * (cropHeight / cropWidth));
-      debugCtx.drawImage(canvas, 0, 0, debugCanvas.width, debugCanvas.height);
-
-      return true;
+      return { x: safeX, y: safeY, w: safeW, h: safeH };
     }
 
     async function loop() {
       if (!scanning) return;
 
       try {
-        if (!captureROI()) {
+        if (!video.videoWidth || !video.videoHeight) {
           setTimeout(loop, 100);
           return;
         }
 
+        const crop = getCropGuide();
+        if (!crop || crop.w <= 0 || crop.h <= 0) {
+          setTimeout(loop, 100);
+          return;
+        }
+
+        // Keep internal processing canvas 1:1 with native stream resolution
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+        }
+
+        // Draw current uncompressed video frame
+        ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+
+        // Update debug panel with crop region
+        debugCanvas.width = 220;
+        debugCanvas.height = Math.round(220 * (crop.h / crop.w));
+        debugCtx.drawImage(
+          canvas,
+          crop.x, crop.y, crop.w, crop.h,
+          0, 0, debugCanvas.width, debugCanvas.height
+        );
+
         decodeCount++;
-        setStatus("Decoding...");
+        setStatus("Decoding frame...");
 
-        // Convert canvas pixels to ZXing BinaryBitmap
-        const luminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
-        const hybridBinarizer = new ZXing.HybridBinarizer(luminanceSource);
-        const bitmap = new ZXing.BinaryBitmap(hybridBinarizer);
+        // 1. Load full 1:1 resolution frame into ZXing LuminanceSource
+        const fullSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
 
-        // Perform PDF417 decode directly on bitmap
+        // 2. Perform native crop at matrix level to retain high pixel density
+        const croppedSource = fullSource.crop(crop.x, crop.y, crop.w, crop.h);
+
+        // 3. Process high-density binarization
+        const binarizer = new ZXing.HybridBinarizer(croppedSource);
+        const bitmap = new ZXing.BinaryBitmap(binarizer);
+
+        // 4. Decode
         const result = pdfReader.decode(bitmap);
 
         scanning = false;
@@ -202,17 +248,21 @@ Message: ${lastMessage}`;
         return;
 
       } catch (err) {
-        // ZXing throws NotFoundException / ChecksumException when no barcode is in frame
-        if (err.name === "NotFoundException" || err.name === "ChecksumException" || err.name === "FormatException") {
+        // ZXing throws NotFoundException when no barcode is detected in frame
+        if (
+          err.name === "NotFoundException" || 
+          err.name === "ChecksumException" || 
+          err.name === "FormatException"
+        ) {
           lastError = "Scanning...";
-          lastMessage = "No PDF417 detected in ROI";
+          lastMessage = "Keep PDF417 inside box";
         } else {
           lastError = err.name || "Error";
-          lastMessage = err.message || err;
+          lastMessage = err.message || String(err);
         }
       }
 
-      setTimeout(loop, 120);
+      setTimeout(loop, 80);
     }
 
     async function send(data) {
@@ -221,9 +271,7 @@ Message: ${lastMessage}`;
       try {
         const response = await fetch(SCRIPT_URL, {
           method: "POST",
-          headers: {
-            "Content-Type": "text/plain"
-          },
+          headers: { "Content-Type": "text/plain" },
           body: JSON.stringify(data)
         });
 
@@ -231,58 +279,69 @@ Message: ${lastMessage}`;
 
         if (result.status === "OK") {
           nameEl.textContent = (result.nombre || data.nombre) + " " + (result.apellido || data.apellido);
-          setStatus("Attendance recorded", "ok");
+          setStatus("Recorded!", "ok");
         } else {
           nameEl.textContent = "";
           lastError = result.status;
           lastMessage = result.message || "";
           setStatus(result.status, "bad");
         }
-
       } catch (err) {
         lastError = err.name || "Error";
         lastMessage = err.message || "";
         setStatus("Network error", "bad");
       }
 
-      // Pause briefly before resuming scanning
+      // Brief delay before starting next scan
       setTimeout(() => {
         scanning = true;
         loop();
-      }, 2500);
+      }, 2000);
     }
 
     async function start() {
-      setStatus("Starting camera...");
+      setStatus("Initializing camera...");
 
       try {
-        // Initialize core PDF417 reader instance
         pdfReader = new ZXing.PDF417Reader();
 
+        // Flexible constraints: requests high-res flexible parameters instead of fixed numbers
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "environment",
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            width: { ideal: 1920, min: 640 },
+            height: { ideal: 1080, min: 480 },
+            aspectRatio: { ideal: 1.7777777778 }
           }
         });
 
         video.srcObject = stream;
         await video.play();
 
-        setStatus("Scanning...");
+        // Optional hardware focus request
+        const track = stream.getVideoTracks()[0];
+        if (track && 'applyConstraints' in track) {
+          try {
+            await track.applyConstraints({
+              advanced: [{ focusMode: "continuous" }]
+            });
+          } catch (e) {
+            // Hardware constraint unsupported by device
+          }
+        }
+
+        setStatus("Scanning active...");
         loop();
+
       } catch (err) {
-        lastError = err.name;
-        lastMessage = err.message;
-        setStatus("Camera error", "bad");
+        lastError = err.name || "Error";
+        lastMessage = err.message || String(err);
+        setStatus("Camera failed to start", "bad");
       }
     }
 
     start();
-
   </script>
-
 </body>
 
 </html>
