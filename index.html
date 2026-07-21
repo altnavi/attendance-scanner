@@ -20,7 +20,7 @@
       font-family: monospace;
     }
 
-    /* Video stretches to fill viewport while maintaining aspect ratio */
+    /* Video stretches to fill screen while maintaining camera aspect ratio */
     #video {
       position: fixed;
       top: 0;
@@ -47,7 +47,7 @@
       z-index: 10;
     }
 
-    /* Offscreen processing canvas */
+    /* Offscreen processing canvas for cropped ROI */
     #canvas {
       display: none;
     }
@@ -147,7 +147,6 @@ Message    : ${lastMessage}`;
 
     function parseDNI(raw) {
       const p = raw.split("@");
-      // Format parser for Argentine PDF417 DNI documents
       return {
         dni: p[4]?.trim() || p[1]?.trim() || "",
         apellido: p[1]?.trim() || "",
@@ -156,8 +155,8 @@ Message    : ${lastMessage}`;
     }
 
     /**
-     * Calculates crop bounds in camera stream pixel dimensions 
-     * accounting for CSS object-fit: cover offset.
+     * Maps the visual screen overlay (green ROI box) directly to 1:1 camera sensor pixels,
+     * accounting for CSS 'object-fit: cover' offsets.
      */
     function getCropGuide() {
       const vWidth = video.videoWidth;
@@ -167,7 +166,7 @@ Message    : ${lastMessage}`;
       const roiRect = roi.getBoundingClientRect();
       const videoRect = video.getBoundingClientRect();
 
-      // Object-fit cover scaling math
+      // Calculate object-fit scaling factor
       const scale = Math.max(videoRect.width / vWidth, videoRect.height / vHeight);
       const visibleWidth = videoRect.width / scale;
       const visibleHeight = videoRect.height / scale;
@@ -180,7 +179,7 @@ Message    : ${lastMessage}`;
       const cropW = Math.round(roiRect.width / scale);
       const cropH = Math.round(roiRect.height / scale);
 
-      // Clamp coordinates to camera pixel frame boundaries
+      // Clamp coordinates safely within camera frame boundaries
       const safeX = Math.max(0, Math.min(vWidth - 1, cropX));
       const safeY = Math.max(0, Math.min(vHeight - 1, cropY));
       const safeW = Math.min(vWidth - safeX, cropW);
@@ -204,38 +203,33 @@ Message    : ${lastMessage}`;
           return;
         }
 
-        // Keep internal processing canvas 1:1 with native stream resolution
-        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+        // 1. Resize processing canvas to match EXACT cropped pixel dimensions (Native 1:1 density)
+        if (canvas.width !== crop.w || canvas.height !== crop.h) {
+          canvas.width = crop.w;
+          canvas.height = crop.h;
         }
 
-        // Draw current uncompressed video frame
-        ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+        // 2. Draw ONLY the target sub-region directly from video element onto canvas
+        ctx.drawImage(
+          video,
+          crop.x, crop.y, crop.w, crop.h, // Source bounds in camera feed
+          0, 0, crop.w, crop.h           // Destination bounds on canvas
+        );
 
-        // Update debug panel with crop region
+        // 3. Render debug preview panel
         debugCanvas.width = 220;
         debugCanvas.height = Math.round(220 * (crop.h / crop.w));
-        debugCtx.drawImage(
-          canvas,
-          crop.x, crop.y, crop.w, crop.h,
-          0, 0, debugCanvas.width, debugCanvas.height
-        );
+        debugCtx.drawImage(canvas, 0, 0, debugCanvas.width, debugCanvas.height);
 
         decodeCount++;
         setStatus("Decoding frame...");
 
-        // 1. Load full 1:1 resolution frame into ZXing LuminanceSource
-        const fullSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
-
-        // 2. Perform native crop at matrix level to retain high pixel density
-        const croppedSource = fullSource.crop(crop.x, crop.y, crop.w, crop.h);
-
-        // 3. Process high-density binarization
-        const binarizer = new ZXing.HybridBinarizer(croppedSource);
+        // 4. Instantiate LuminanceSource directly on the pre-cropped canvas buffer
+        const luminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+        const binarizer = new ZXing.HybridBinarizer(luminanceSource);
         const bitmap = new ZXing.BinaryBitmap(binarizer);
 
-        // 4. Decode
+        // 5. Run decoding on isolated high-density ROI matrix
         const result = pdfReader.decode(bitmap);
 
         scanning = false;
@@ -248,7 +242,6 @@ Message    : ${lastMessage}`;
         return;
 
       } catch (err) {
-        // ZXing throws NotFoundException when no barcode is detected in frame
         if (
           err.name === "NotFoundException" || 
           err.name === "ChecksumException" || 
@@ -292,7 +285,7 @@ Message    : ${lastMessage}`;
         setStatus("Network error", "bad");
       }
 
-      // Brief delay before starting next scan
+      // 2 second pause before enabling camera scanner again
       setTimeout(() => {
         scanning = true;
         loop();
@@ -305,7 +298,7 @@ Message    : ${lastMessage}`;
       try {
         pdfReader = new ZXing.PDF417Reader();
 
-        // Flexible constraints: requests high-res flexible parameters instead of fixed numbers
+        // Dynamically request best resolution available without hardcoding fixed limits
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "environment",
@@ -318,7 +311,7 @@ Message    : ${lastMessage}`;
         video.srcObject = stream;
         await video.play();
 
-        // Optional hardware focus request
+        // Apply hardware autofocus lock if supported by browser/device
         const track = stream.getVideoTracks()[0];
         if (track && 'applyConstraints' in track) {
           try {
@@ -326,7 +319,7 @@ Message    : ${lastMessage}`;
               advanced: [{ focusMode: "continuous" }]
             });
           } catch (e) {
-            // Hardware constraint unsupported by device
+            // Focus constraints unsupported by hardware
           }
         }
 
