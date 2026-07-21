@@ -26,8 +26,8 @@
       position: fixed;
       left: 50%;
       top: 50%;
-      width: 500px;
-      height: 150px;
+      width: 450px;
+      height: 160px;
       transform: translate(-50%, -50%);
       border: 3px solid lime;
       border-radius: 8px;
@@ -96,7 +96,7 @@
 
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxFDKU5A6BXxJLrMkzrki4StPkZcU0SkkyAtK0YN5cIUC1ar08K-TquZxLuMZ5DfeA/exec";
 
-    let reader;
+    let pdfReader;
 
     let decodeCount = 0;
     let lastError = "";
@@ -104,6 +104,7 @@
     let scanning = true;
 
     const video = document.getElementById("video");
+    const roi = document.getElementById("roi");
 
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -116,106 +117,108 @@
     const statusEl = document.getElementById("status");
     const nameEl = document.getElementById("name");
 
-    function status(text) {
-
+    function setStatus(text, cssClass = "") {
+      statusEl.className = cssClass;
       statusEl.textContent =
         `Status : ${text}
 Frames : ${decodeCount}
 Error  : ${lastError}
 Message: ${lastMessage}`;
-
     }
 
     function parseDNI(raw) {
-
       const p = raw.split("@");
-
+      // Argentine DNI PDF417 format mapping
       return {
-
-        dni: p[4]?.trim() || "",
+        dni: p[4]?.trim() || p[1]?.trim() || "",
         apellido: p[1]?.trim() || "",
         nombre: p[2]?.trim() || ""
-
       };
-
     }
 
-    function allocateCanvases() {
+    // Crops the section of video visible inside the green ROI overlay onto the canvas
+    function captureROI() {
+      const vWidth = video.videoWidth;
+      const vHeight = video.videoHeight;
 
-      if (canvas.width === video.videoWidth)
-        return;
+      if (!vWidth || !vHeight) return false;
 
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      const roiRect = roi.getBoundingClientRect();
+      const videoRect = video.getBoundingClientRect();
 
+      // Calculate scale ratio between object-fit video and real camera feed resolution
+      const scaleX = vWidth / videoRect.width;
+      const scaleY = vHeight / videoRect.height;
+
+      const cropX = Math.max(0, (roiRect.left - videoRect.left) * scaleX);
+      const cropY = Math.max(0, (roiRect.top - videoRect.top) * scaleY);
+      const cropWidth = Math.min(vWidth - cropX, roiRect.width * scaleX);
+      const cropHeight = Math.min(vHeight - cropY, roiRect.height * scaleY);
+
+      canvas.width = cropWidth;
+      canvas.height = cropHeight;
+
+      ctx.drawImage(
+        video,
+        cropX, cropY, cropWidth, cropHeight,
+        0, 0, cropWidth, cropHeight
+      );
+
+      // Render debug thumbnail in top-right
       debugCanvas.width = 220;
-      debugCanvas.height = Math.round(
-        220 * video.videoHeight / video.videoWidth);
+      debugCanvas.height = Math.round(220 * (cropHeight / cropWidth));
+      debugCtx.drawImage(canvas, 0, 0, debugCanvas.width, debugCanvas.height);
 
+      return true;
     }
 
     async function loop() {
-
-      if (!scanning)
-        return;
+      if (!scanning) return;
 
       try {
-
-        if (!video.videoWidth) {
+        if (!captureROI()) {
           setTimeout(loop, 100);
           return;
         }
 
-        allocateCanvases();
-
-        ctx.drawImage(video, 0, 0);
-
-        debugCtx.drawImage(
-          canvas,
-          0,
-          0,
-          debugCanvas.width,
-          debugCanvas.height
-        );
-
-
-
         decodeCount++;
+        setStatus("Decoding...");
 
-        status("Scanning...");
+        // Convert canvas pixels to ZXing BinaryBitmap
+        const luminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+        const hybridBinarizer = new ZXing.HybridBinarizer(luminanceSource);
+        const bitmap = new ZXing.BinaryBitmap(hybridBinarizer);
 
-        status("Decoding...");
-        const result = await reader.decodeFromCanvas(canvas);
-        status("Decoded");
+        // Perform PDF417 decode directly on bitmap
+        const result = pdfReader.decode(bitmap);
 
         scanning = false;
-
         const raw = result.getText();
-
         const data = parseDNI(raw);
         data.raw = raw;
 
+        setStatus("Decoded successfully!", "ok");
         send(data);
-
         return;
 
       } catch (err) {
-
-        lastError = err.name || "";
-        lastMessage = err.message || "";
-
+        // ZXing throws NotFoundException / ChecksumException when no barcode is in frame
+        if (err.name === "NotFoundException" || err.name === "ChecksumException" || err.name === "FormatException") {
+          lastError = "Scanning...";
+          lastMessage = "No PDF417 detected in ROI";
+        } else {
+          lastError = err.name || "Error";
+          lastMessage = err.message || err;
+        }
       }
 
       setTimeout(loop, 120);
-
     }
 
     async function send(data) {
-
-      setStatus("Sending...");
+      setStatus("Sending to Google Sheet...");
 
       try {
-
         const response = await fetch(SCRIPT_URL, {
           method: "POST",
           headers: {
@@ -226,63 +229,54 @@ Message: ${lastMessage}`;
 
         const result = await response.json();
 
-        lastError = "";
-        lastMessage = "";
-
         if (result.status === "OK") {
-
-          nameEl.textContent =
-            result.nombre + " " + result.apellido;
-
+          nameEl.textContent = (result.nombre || data.nombre) + " " + (result.apellido || data.apellido);
           setStatus("Attendance recorded", "ok");
-
         } else {
-
           nameEl.textContent = "";
-
           lastError = result.status;
           lastMessage = result.message || "";
-
           setStatus(result.status, "bad");
         }
 
       } catch (err) {
-
-        lastError = err.name;
-        lastMessage = err.message;
-
+        lastError = err.name || "Error";
+        lastMessage = err.message || "";
         setStatus("Network error", "bad");
       }
 
-      scanning = true;
-
-      setTimeout(loop, 1000);
+      // Pause briefly before resuming scanning
+      setTimeout(() => {
+        scanning = true;
+        loop();
+      }, 2500);
     }
 
     async function start() {
+      setStatus("Starting camera...");
 
-      status("Starting camera...");
+      try {
+        // Initialize core PDF417 reader instance
+        pdfReader = new ZXing.PDF417Reader();
 
-      const stream = await navigator.mediaDevices.getUserMedia({
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        });
 
-        video: {
-          facingMode: "environment",
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        }
+        video.srcObject = stream;
+        await video.play();
 
-      });
-
-      video.srcObject = stream;
-
-      await video.play();
-
-      reader = new ZXing.BrowserPDF417Reader();
-
-      status("Scanning...");
-
-      loop();
-
+        setStatus("Scanning...");
+        loop();
+      } catch (err) {
+        lastError = err.name;
+        lastMessage = err.message;
+        setStatus("Camera error", "bad");
+      }
     }
 
     start();
