@@ -20,7 +20,6 @@
       font-family: monospace;
     }
 
-    /* Video stretches to fill screen while maintaining camera aspect ratio */
     #video {
       position: fixed;
       top: 0;
@@ -30,7 +29,6 @@
       object-fit: cover;
     }
 
-    /* Green target guide overlay */
     #roi {
       position: fixed;
       left: 50%;
@@ -47,12 +45,10 @@
       z-index: 10;
     }
 
-    /* Offscreen processing canvas for cropped ROI */
     #canvas {
       display: none;
     }
 
-    /* Debug crop window in top right */
     #debugCanvas {
       position: fixed;
       right: 12px;
@@ -63,13 +59,12 @@
       z-index: 20;
     }
 
-    /* Status overlay console */
     #status {
       position: fixed;
       top: 12px;
       left: 12px;
       right: 250px;
-      background: rgba(0, 0, 0, 0.8);
+      background: rgba(0, 0, 0, 0.85);
       color: #fff;
       padding: 10px;
       border-radius: 6px;
@@ -79,22 +74,96 @@
       border: 1px solid rgba(255, 255, 255, 0.2);
     }
 
-    /* Decoded result display */
-    #name {
+    /* Decoded result display banner */
+    #resultBanner {
       position: fixed;
-      bottom: 40px;
-      width: 100%;
+      bottom: 20px;
+      left: 5%;
+      width: 90%;
+      padding: 16px;
+      box-sizing: border-box;
       text-align: center;
       color: #fff;
       font-family: sans-serif;
-      font-size: 22px;
-      font-weight: bold;
-      text-shadow: 0px 2px 4px rgba(0,0,0,0.9);
-      z-index: 20;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 30;
+      display: none;
     }
 
+    #name {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    #badge {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: bold;
+    }
+
+    /* Status State Classes */
     .ok { color: #00ff00 !important; }
+    .warn { color: #ffcc00 !important; }
     .bad { color: #ff3333 !important; }
+
+    .banner-ok { border: 2px solid #00ff00; color: #00ff00; }
+    .banner-warn { border: 2px solid #ffcc00; color: #ffcc00; }
+    .banner-bad { border: 2px solid #ff3333; color: #ff3333; }
+
+    /* Manual Input Toggle Button */
+    #manualToggle {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 12px 18px;
+      border-radius: 50px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 40;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    }
+
+    /* Manual Input Modal */
+    #manualModal {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0, 0, 0, 0.9);
+      z-index: 50;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: sans-serif;
+    }
+
+    #manualModal input {
+      padding: 12px;
+      font-size: 18px;
+      margin: 8px 0;
+      width: 80%;
+      max-width: 300px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+    }
+
+    #manualModal button {
+      padding: 12px 24px;
+      margin-top: 12px;
+      font-size: 16px;
+      border-radius: 6px;
+      border: none;
+      background: #28a745;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
   </style>
 </head>
 
@@ -108,7 +177,24 @@
   <canvas id="debugCanvas"></canvas>
 
   <div id="status">Initializing...</div>
-  <div id="name"></div>
+
+  <!-- Detailed Scan Result Banner -->
+  <div id="resultBanner">
+    <div id="name"></div>
+    <div id="badge"></div>
+  </div>
+
+  <button id="manualToggle" onclick="toggleManualModal(true)">⌨ Manual Input</button>
+
+  <!-- Fallback Modal for Manual Entry -->
+  <div id="manualModal">
+    <h3 style="color: white;">Manual Entry</h3>
+    <input type="text" id="manualDni" placeholder="DNI Number" />
+    <input type="text" id="manualNombre" placeholder="Nombre (Optional)" />
+    <input type="text" id="manualApellido" placeholder="Apellido (Optional)" />
+    <button onclick="submitManual()">Submit Attendance</button>
+    <button onclick="toggleManualModal(false)" style="background: #dc3545; margin-top: 8px;">Cancel</button>
+  </div>
 
   <script>
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxYI2FpyyYnEYg2OMn3uHn3v1sl-rsuJSoPqnJWdnBSHMi3Z1KO-NpKxRa1mAtNn7UE/exec";
@@ -129,7 +215,25 @@
     const debugCtx = debugCanvas.getContext("2d");
 
     const statusEl = document.getElementById("status");
+    const bannerEl = document.getElementById("resultBanner");
     const nameEl = document.getElementById("name");
+    const badgeEl = document.getElementById("badge");
+
+    // Simple Synthesized Beep Feedback for Scans
+    function playBeep(freq = 880, type = 'sine') {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15);
+        setTimeout(() => audioCtx.close(), 200);
+      } catch (e) { }
+    }
 
     function setStatus(text, cssClass = "") {
       statusEl.className = cssClass;
@@ -154,10 +258,6 @@ Message    : ${lastMessage}`;
       };
     }
 
-    /**
-     * Maps the visual screen overlay (green ROI box) directly to 1:1 camera sensor pixels,
-     * accounting for CSS 'object-fit: cover' offsets.
-     */
     function getCropGuide() {
       const vWidth = video.videoWidth;
       const vHeight = video.videoHeight;
@@ -166,7 +266,6 @@ Message    : ${lastMessage}`;
       const roiRect = roi.getBoundingClientRect();
       const videoRect = video.getBoundingClientRect();
 
-      // Calculate object-fit scaling factor
       const scale = Math.max(videoRect.width / vWidth, videoRect.height / vHeight);
       const visibleWidth = videoRect.width / scale;
       const visibleHeight = videoRect.height / scale;
@@ -179,7 +278,6 @@ Message    : ${lastMessage}`;
       const cropW = Math.round(roiRect.width / scale);
       const cropH = Math.round(roiRect.height / scale);
 
-      // Clamp coordinates safely within camera frame boundaries
       const safeX = Math.max(0, Math.min(vWidth - 1, cropX));
       const safeY = Math.max(0, Math.min(vHeight - 1, cropY));
       const safeW = Math.min(vWidth - safeX, cropW);
@@ -203,20 +301,13 @@ Message    : ${lastMessage}`;
           return;
         }
 
-        // 1. Resize processing canvas to match EXACT cropped pixel dimensions (Native 1:1 density)
         if (canvas.width !== crop.w || canvas.height !== crop.h) {
           canvas.width = crop.w;
           canvas.height = crop.h;
         }
 
-        // 2. Draw ONLY the target sub-region directly from video element onto canvas
-        ctx.drawImage(
-          video,
-          crop.x, crop.y, crop.w, crop.h, // Source bounds in camera feed
-          0, 0, crop.w, crop.h           // Destination bounds on canvas
-        );
+        ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
 
-        // 3. Render debug preview panel
         debugCanvas.width = 220;
         debugCanvas.height = Math.round(220 * (crop.h / crop.w));
         debugCtx.drawImage(canvas, 0, 0, debugCanvas.width, debugCanvas.height);
@@ -224,15 +315,14 @@ Message    : ${lastMessage}`;
         decodeCount++;
         setStatus("Decoding frame...");
 
-        // 4. Instantiate LuminanceSource directly on the pre-cropped canvas buffer
         const luminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
         const binarizer = new ZXing.HybridBinarizer(luminanceSource);
         const bitmap = new ZXing.BinaryBitmap(binarizer);
 
-        // 5. Run decoding on isolated high-density ROI matrix
         const result = pdfReader.decode(bitmap);
 
         scanning = false;
+        playBeep(880); // Audio tone on success
         const raw = result.getText();
         const data = parseDNI(raw);
         data.raw = raw;
@@ -270,26 +360,62 @@ Message    : ${lastMessage}`;
 
         const result = await response.json();
 
+        bannerEl.style.display = "block";
+
         if (result.status === "OK") {
-          nameEl.textContent = (result.nombre || data.nombre) + " " + (result.apellido || data.apellido);
+          bannerEl.className = "banner-ok";
+          nameEl.textContent = `${result.nombre || data.nombre} ${result.apellido || data.apellido}`;
+          badgeEl.textContent = `✔ REGISTRADO (${result.table || 'OK'})`;
           setStatus("Recorded!", "ok");
+        } else if (result.status === "NO_ANOTADO") {
+          bannerEl.className = "banner-warn";
+          nameEl.textContent = `${data.nombre || 'DNI:'} ${data.apellido || data.dni}`;
+          badgeEl.textContent = `⚠ NO ANOTADO (REGISTRADO AUTOMÁTICAMENTE)`;
+          setStatus("Recorded as NO_ANOTADO", "warn");
         } else {
-          nameEl.textContent = "";
-          lastError = result.status;
-          lastMessage = result.message || "";
+          bannerEl.className = "banner-bad";
+          nameEl.textContent = "ERROR";
+          badgeEl.textContent = result.message || "Request failed";
           setStatus(result.status, "bad");
         }
       } catch (err) {
+        bannerEl.style.display = "block";
+        bannerEl.className = "banner-bad";
+        nameEl.textContent = "NETWORK ERROR";
+        badgeEl.textContent = "Could not connect to Google Apps Script";
         lastError = err.name || "Error";
         lastMessage = err.message || "";
         setStatus("Network error", "bad");
       }
 
-      // 2 second pause before enabling camera scanner again
+      // 2.5 second delay before re-enabling scanner feed
       setTimeout(() => {
+        bannerEl.style.display = "none";
         scanning = true;
         loop();
-      }, 2000);
+      }, 2500);
+    }
+
+    function toggleManualModal(show) {
+      document.getElementById("manualModal").style.display = show ? "flex" : "none";
+      scanning = !show;
+      if (!show) loop();
+    }
+
+    function submitManual() {
+      const dni = document.getElementById("manualDni").value.trim();
+      const nombre = document.getElementById("manualNombre").value.trim();
+      const apellido = document.getElementById("manualApellido").value.trim();
+
+      if (!dni) return alert("Please enter a DNI");
+
+      toggleManualModal(false);
+      send({ dni, nombre, apellido });
+      
+      // Reset inputs
+      document.getElementById("manualDni").value = "";
+      document.getElementById("manualNombre").value = "";
+      document.getElementById("manualApellido").value = "";
     }
 
     async function start() {
@@ -298,7 +424,6 @@ Message    : ${lastMessage}`;
       try {
         pdfReader = new ZXing.PDF417Reader();
 
-        // Dynamically request best resolution available without hardcoding fixed limits
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "environment",
@@ -311,16 +436,13 @@ Message    : ${lastMessage}`;
         video.srcObject = stream;
         await video.play();
 
-        // Apply hardware autofocus lock if supported by browser/device
         const track = stream.getVideoTracks()[0];
         if (track && 'applyConstraints' in track) {
           try {
             await track.applyConstraints({
               advanced: [{ focusMode: "continuous" }]
             });
-          } catch (e) {
-            // Focus constraints unsupported by hardware
-          }
+          } catch (e) { }
         }
 
         setStatus("Scanning active...");
