@@ -17,7 +17,7 @@
       height: 100%;
       overflow: hidden;
       background: #000;
-      font-family: monospace;
+      font-family: sans-serif;
     }
 
     #video {
@@ -29,6 +29,7 @@
       object-fit: cover;
     }
 
+    /* Green target guide overlay */
     #roi {
       position: fixed;
       left: 50%;
@@ -45,30 +46,18 @@
       z-index: 10;
     }
 
-    #canvas {
-      display: none;
-    }
+    #canvas { display: none; }
 
-    #debugCanvas {
+    /* Minimal Scanner Status Pill */
+    #statusPill {
       position: fixed;
-      right: 12px;
-      top: 12px;
-      width: 220px;
-      border: 2px solid #ffff00;
-      background: #000;
-      z-index: 20;
-    }
-
-    #status {
-      position: fixed;
-      top: 12px;
-      left: 12px;
-      right: 250px;
-      background: rgba(0, 0, 0, 0.85);
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.75);
       color: #fff;
-      padding: 10px;
-      border-radius: 6px;
-      white-space: pre-wrap;
+      padding: 6px 16px;
+      border-radius: 20px;
       font-size: 13px;
       z-index: 20;
       border: 1px solid rgba(255, 255, 255, 0.2);
@@ -77,14 +66,13 @@
     /* Decoded result display banner */
     #resultBanner {
       position: fixed;
-      bottom: 20px;
+      bottom: 30px;
       left: 5%;
       width: 90%;
       padding: 16px;
       box-sizing: border-box;
       text-align: center;
       color: #fff;
-      font-family: sans-serif;
       border-radius: 12px;
       background: rgba(0, 0, 0, 0.85);
       z-index: 30;
@@ -92,7 +80,7 @@
     }
 
     #name {
-      font-size: 24px;
+      font-size: 22px;
       font-weight: bold;
       margin-bottom: 4px;
     }
@@ -104,30 +92,25 @@
       font-weight: bold;
     }
 
-    /* Status State Classes */
-    .ok { color: #00ff00 !important; }
-    .warn { color: #ffcc00 !important; }
-    .bad { color: #ff3333 !important; }
-
+    /* Banner State Colors */
     .banner-ok { border: 2px solid #00ff00; color: #00ff00; }
     .banner-warn { border: 2px solid #ffcc00; color: #ffcc00; }
     .banner-bad { border: 2px solid #ff3333; color: #ff3333; }
 
-    /* Manual Input Toggle Button */
+    /* Manual Entry Button */
     #manualToggle {
       position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: #007bff;
+      top: 16px;
+      right: 16px;
+      background: rgba(255, 255, 255, 0.2);
       color: white;
-      border: none;
-      padding: 12px 18px;
-      border-radius: 50px;
-      font-size: 14px;
-      font-weight: bold;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      padding: 8px 14px;
+      border-radius: 20px;
+      font-size: 13px;
       cursor: pointer;
       z-index: 40;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+      backdrop-filter: blur(4px);
     }
 
     /* Manual Input Modal */
@@ -140,7 +123,6 @@
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      font-family: sans-serif;
     }
 
     #manualModal input {
@@ -155,7 +137,7 @@
 
     #manualModal button {
       padding: 12px 24px;
-      margin-top: 12px;
+      margin-top: 10px;
       font-size: 16px;
       border-radius: 6px;
       border: none;
@@ -174,52 +156,43 @@
   <div id="roi"></div>
 
   <canvas id="canvas"></canvas>
-  <canvas id="debugCanvas"></canvas>
 
-  <div id="status">Initializing...</div>
+  <div id="statusPill">Escaneando...</div>
 
-  <!-- Detailed Scan Result Banner -->
+  <!-- Scan Result Banner -->
   <div id="resultBanner">
     <div id="name"></div>
     <div id="badge"></div>
   </div>
 
-  <button id="manualToggle" onclick="toggleManualModal(true)">⌨ Manual Input</button>
+  <button id="manualToggle" onclick="toggleManualModal(true)">⌨ Manual</button>
 
-  <!-- Fallback Modal for Manual Entry -->
+  <!-- Manual Entry Modal -->
   <div id="manualModal">
-    <h3 style="color: white;">Manual Entry</h3>
+    <h3 style="color: white; margin-bottom: 12px;">Ingreso Manual</h3>
     <input type="text" id="manualDni" placeholder="DNI Number" />
-    <input type="text" id="manualNombre" placeholder="Nombre (Optional)" />
-    <input type="text" id="manualApellido" placeholder="Apellido (Optional)" />
-    <button onclick="submitManual()">Submit Attendance</button>
-    <button onclick="toggleManualModal(false)" style="background: #dc3545; margin-top: 8px;">Cancel</button>
+    <input type="text" id="manualNombre" placeholder="Nombre (Opcional)" />
+    <input type="text" id="manualApellido" placeholder="Apellido (Opcional)" />
+    <button onclick="submitManual()">Registrar Asistencia</button>
+    <button onclick="toggleManualModal(false)" style="background: #dc3545; margin-top: 8px;">Cancelar</button>
   </div>
 
   <script>
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxYI2FpyyYnEYg2OMn3uHn3v1sl-rsuJSoPqnJWdnBSHMi3Z1KO-NpKxRa1mAtNn7UE/exec";
 
     let pdfReader;
-    let decodeCount = 0;
-    let lastError = "";
-    let lastMessage = "";
     let scanning = true;
 
     const video = document.getElementById("video");
     const roi = document.getElementById("roi");
-
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-    const debugCanvas = document.getElementById("debugCanvas");
-    const debugCtx = debugCanvas.getContext("2d");
-
-    const statusEl = document.getElementById("status");
+    const statusPill = document.getElementById("statusPill");
     const bannerEl = document.getElementById("resultBanner");
     const nameEl = document.getElementById("name");
     const badgeEl = document.getElementById("badge");
 
-    // Simple Synthesized Beep Feedback for Scans
     function playBeep(freq = 880, type = 'sine') {
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -233,20 +206,6 @@
         gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.15);
         setTimeout(() => audioCtx.close(), 200);
       } catch (e) { }
-    }
-
-    function setStatus(text, cssClass = "") {
-      statusEl.className = cssClass;
-      const res = (video.videoWidth && video.videoHeight) 
-        ? `${video.videoWidth}x${video.videoHeight}` 
-        : "Detecting...";
-      
-      statusEl.textContent = 
-        `Status     : ${text}
-Camera Res : ${res}
-Frames     : ${decodeCount}
-Error      : ${lastError}
-Message    : ${lastMessage}`;
     }
 
     function parseDNI(raw) {
@@ -308,13 +267,6 @@ Message    : ${lastMessage}`;
 
         ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
 
-        debugCanvas.width = 220;
-        debugCanvas.height = Math.round(220 * (crop.h / crop.w));
-        debugCtx.drawImage(canvas, 0, 0, debugCanvas.width, debugCanvas.height);
-
-        decodeCount++;
-        setStatus("Decoding frame...");
-
         const luminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
         const binarizer = new ZXing.HybridBinarizer(luminanceSource);
         const bitmap = new ZXing.BinaryBitmap(binarizer);
@@ -322,34 +274,22 @@ Message    : ${lastMessage}`;
         const result = pdfReader.decode(bitmap);
 
         scanning = false;
-        playBeep(880); // Audio tone on success
+        playBeep(880);
         const raw = result.getText();
         const data = parseDNI(raw);
-        data.raw = raw;
-
-        setStatus("Decoded successfully!", "ok");
+        
         send(data);
         return;
 
       } catch (err) {
-        if (
-          err.name === "NotFoundException" || 
-          err.name === "ChecksumException" || 
-          err.name === "FormatException"
-        ) {
-          lastError = "Scanning...";
-          lastMessage = "Keep PDF417 inside box";
-        } else {
-          lastError = err.name || "Error";
-          lastMessage = err.message || String(err);
-        }
+        // Scanning loops continuously until code is found
       }
 
       setTimeout(loop, 80);
     }
 
     async function send(data) {
-      setStatus("Sending to Google Sheet...");
+      statusPill.textContent = "Enviando...";
 
       try {
         const response = await fetch(SCRIPT_URL, {
@@ -364,36 +304,31 @@ Message    : ${lastMessage}`;
 
         if (result.status === "OK") {
           bannerEl.className = "banner-ok";
-          nameEl.textContent = `${result.nombre || data.nombre} ${result.apellido || data.apellido}`;
-          badgeEl.textContent = `✔ REGISTRADO (${result.table || 'OK'})`;
-          setStatus("Recorded!", "ok");
+          nameEl.textContent = `${result.nombre} ${result.apellido}`;
+          badgeEl.textContent = `REGISTRADO (${result.table})`;
         } else if (result.status === "NO_ANOTADO") {
           bannerEl.className = "banner-warn";
           nameEl.textContent = `${data.nombre || 'DNI:'} ${data.apellido || data.dni}`;
-          badgeEl.textContent = `⚠ NO ANOTADO (REGISTRADO AUTOMÁTICAMENTE)`;
-          setStatus("Recorded as NO_ANOTADO", "warn");
+          badgeEl.textContent = `NO ANOTADO`;
         } else {
           bannerEl.className = "banner-bad";
           nameEl.textContent = "ERROR";
-          badgeEl.textContent = result.message || "Request failed";
-          setStatus(result.status, "bad");
+          badgeEl.textContent = result.message || "Error al procesar";
         }
       } catch (err) {
         bannerEl.style.display = "block";
         bannerEl.className = "banner-bad";
-        nameEl.textContent = "NETWORK ERROR";
-        badgeEl.textContent = "Could not connect to Google Apps Script";
-        lastError = err.name || "Error";
-        lastMessage = err.message || "";
-        setStatus("Network error", "bad");
+        nameEl.textContent = "ERROR DE RED";
+        badgeEl.textContent = "No se pudo conectar con el servidor";
       }
 
-      // 2.5 second delay before re-enabling scanner feed
+      statusPill.textContent = "Escaneando...";
+
       setTimeout(() => {
         bannerEl.style.display = "none";
         scanning = true;
         loop();
-      }, 2500);
+      }, 2000);
     }
 
     function toggleManualModal(show) {
@@ -407,20 +342,17 @@ Message    : ${lastMessage}`;
       const nombre = document.getElementById("manualNombre").value.trim();
       const apellido = document.getElementById("manualApellido").value.trim();
 
-      if (!dni) return alert("Please enter a DNI");
+      if (!dni) return alert("Ingrese un DNI");
 
       toggleManualModal(false);
       send({ dni, nombre, apellido });
       
-      // Reset inputs
       document.getElementById("manualDni").value = "";
       document.getElementById("manualNombre").value = "";
       document.getElementById("manualApellido").value = "";
     }
 
     async function start() {
-      setStatus("Initializing camera...");
-
       try {
         pdfReader = new ZXing.PDF417Reader();
 
@@ -445,13 +377,10 @@ Message    : ${lastMessage}`;
           } catch (e) { }
         }
 
-        setStatus("Scanning active...");
         loop();
 
       } catch (err) {
-        lastError = err.name || "Error";
-        lastMessage = err.message || String(err);
-        setStatus("Camera failed to start", "bad");
+        statusPill.textContent = "Error al iniciar cámara";
       }
     }
 
